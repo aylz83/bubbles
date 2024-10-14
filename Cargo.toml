@@ -1,5 +1,5 @@
 [package]
-name = "nimblefin"
+name = "bubbles"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,9 +13,9 @@ rustc-hash = "2.0.0"
 tokio = { version = "1.40.0", features = ["full"] }
 
 [lib]
-name = "nimblefin"
+name = "bubbles"
 path = "src/lib.rs"
 
 [[bin]]
-name = "nimblefin_example"
+name = "bubbles_example"
 path = "src/main.rs"

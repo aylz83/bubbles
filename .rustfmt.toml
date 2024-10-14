@@ -1,0 +1,9 @@
+indent_style = "Block"
+reorder_imports = false
+brace_style = "AlwaysNextLine"
+control_brace_style = "AlwaysNextLine"
+edition = "2021"
+format_strings = true
+hard_tabs = true
+imports_layout = "Horizontal"
+imports_indent = "Visual"

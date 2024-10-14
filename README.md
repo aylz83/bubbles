@@ -1,4 +1,4 @@
-# nimblefin
+# bubbles
 A (terribly named) fast (and barebone!) BAM parser and pileup rust crate
 
 This is a rust-based BAM parser with pileup capabilities and aimed to be as fast as possible while using as little memory as possible.

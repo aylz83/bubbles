@@ -11,6 +11,9 @@ use log::debug;
 use async_compression::tokio::bufread::GzipDecoder;
 use rustc_hash::FxHashMap;
 
+use std::simd::{Simd, Mask};
+use std::simd::cmp::SimdPartialEq;
+
 const CIGAR_OPS: [char; 9] = ['M', 'I', 'D', 'N', 'S', 'H', 'P', '=', 'X'];
 
 const ALPHABET: [char; 16] = [
@@ -284,76 +287,32 @@ impl Reader
 
 			offset += 1 + l_read_name as usize;
 
-			let mut ref_index = pos;
-
 			// cigar - uint32_t[n_cigar_op]
-			let mut cigar = Vec::<bam::Cigar>::with_capacity(n_cigar_op as usize);
-			bytes[offset..]
-				.chunks_exact(4) // Create chunks of 4 bytes each
-				.take(n_cigar_op as usize) // Limit to the number of CIGAR operations
-				.for_each(|chunk| {
-					let cigar_enc = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-					let op = CIGAR_OPS[(cigar_enc & 0xF) as usize]; // Extract the operation code
-					let length = cigar_enc >> 4; // Extract the length
-
-					match op
-					{
-						'M' | '=' | 'X' =>
-						{
-							for i in 0i32..length as i32
-							{
-								// Align each base of the match to the reference
-								let ref_pos = ref_index + i;
-
-								// Increment the base count for the current reference position
-								*pileup_map.entry((ref_id, ref_pos)).or_insert(0) += 1;
-							}
-							ref_index += length as i32;
-						}
-						'D' =>
-						{
-							ref_index += length as i32;
-						}
-						_ =>
-						{}
-					}
-					cigar.push(bam::Cigar { length, opcode: op }); // Return a tuple of index, length, and operation character
-				});
-			//.collect();
+			let mut ref_index = pos;
+			let cigar = Self::process_cigar(
+				&bytes,
+				&mut offset,
+				n_cigar_op as usize,
+				ref_id,
+				&mut ref_index,
+				pileup_map,
+			);
 
 			debug!("cigar = {:?}", cigar);
 
-			offset += n_cigar_op as usize * 4;
-
 			// seq - uint8_t[(l_seq + 1) / 2]
-			// Iterate through the bytes, decode the high and low nibbles, and collect them into a String
-			let seq = &bytes[offset..(offset + ((l_seq as usize + 1) / 2))]
-				.iter()
-				.enumerate()
-				.flat_map(|(i, &byte)| {
-					let high_nibble = (byte >> 4) & 0x0F; // Extract high nibble (upper 4 bits)
-					let low_nibble = byte & 0x0F; // Extract low nibble (lower 4 bits)
-
-					// Map the nibbles to nucleotides (using BASES array)
-					let mut bases = vec![ALPHABET[high_nibble as usize]];
-					if 2 * i + 1 < l_seq as usize
-					{
-						bases.push(ALPHABET[low_nibble as usize]);
-					}
-					bases
-				})
-				.take(l_seq as usize) // Ensure we only take l_seq bases
-				.collect::<String>();
+			let seq =
+				Self::process_sequence(&bytes[offset..(offset + l_seq as usize)], l_seq as usize);
 
 			debug!("seq = {:?}", &seq);
 
 			offset += (l_seq as usize + 1) / 2;
 
 			// qual - char[l_seq]
-			let qual = &bytes[offset..offset + l_seq as usize]
-				.iter()
-				.map(|q| (*q + 33) as char)
-				.collect::<String>();
+			let qual = Self::process_quality_scores(
+				&bytes[offset..offset + l_seq as usize],
+				l_seq as usize,
+			);
 
 			debug!("qual = {:?}", qual);
 
@@ -387,6 +346,220 @@ impl Reader
 		}
 
 		Ok(Some(()))
+	}
+
+	fn process_cigar(
+		bytes: &[u8],
+		offset: &mut usize,
+		n_cigar_op: usize,
+		ref_id: i32,
+		ref_index: &mut i32,
+		pileup_map: &mut FxHashMap<(i32, i32), u64>,
+	) -> Vec<bam::Cigar>
+	{
+		let mut cigar = Vec::<bam::Cigar>::with_capacity(n_cigar_op as usize);
+		let chunk_size = 4; // Each CIGAR operation is 4 bytes
+		let simd_width = 4; // Using SIMD with 4 `u32` at a time
+
+		while cigar.len() < n_cigar_op
+		{
+			// Calculate remaining operations
+			let remaining_ops = n_cigar_op - cigar.len();
+
+			if remaining_ops >= simd_width && *offset + (simd_width * chunk_size) <= bytes.len()
+			{
+				// Process 4 CIGAR operations with SIMD
+				let cigar_chunk = Simd::<u32, 4>::from_array([
+					u32::from_le_bytes([
+						bytes[*offset],
+						bytes[*offset + 1],
+						bytes[*offset + 2],
+						bytes[*offset + 3],
+					]),
+					u32::from_le_bytes([
+						bytes[*offset + 4],
+						bytes[*offset + 5],
+						bytes[*offset + 6],
+						bytes[*offset + 7],
+					]),
+					u32::from_le_bytes([
+						bytes[*offset + 8],
+						bytes[*offset + 9],
+						bytes[*offset + 10],
+						bytes[*offset + 11],
+					]),
+					u32::from_le_bytes([
+						bytes[*offset + 12],
+						bytes[*offset + 13],
+						bytes[*offset + 14],
+						bytes[*offset + 15],
+					]),
+				]);
+
+				// Extract operation codes and lengths in parallel
+				let opcodes = cigar_chunk & Simd::splat(0xF); // Last 4 bits for opcode
+				let lengths = cigar_chunk >> 4; // Remaining bits for length
+
+				for i in 0..simd_width
+				{
+					let op = CIGAR_OPS[opcodes[i] as usize]; // Extract opcode
+					let length = lengths[i]; // Extract length
+
+					match op
+					{
+						'M' | '=' | 'X' =>
+						{
+							for j in 0..length as i32
+							{
+								let ref_pos = *ref_index + j;
+								*pileup_map.entry((ref_id, ref_pos)).or_insert(0) += 1;
+							}
+							*ref_index += length as i32;
+						}
+						'D' =>
+						{
+							*ref_index += length as i32;
+						}
+						_ =>
+						{}
+					}
+
+					cigar.push(bam::Cigar { length, opcode: op });
+				}
+
+				*offset += simd_width * chunk_size; // Move to the next set of CIGAR operations
+			}
+			else
+			{
+				// Fallback to scalar processing for remaining CIGAR operations
+				while cigar.len() < n_cigar_op && *offset + chunk_size <= bytes.len()
+				{
+					let cigar_enc = u32::from_le_bytes([
+						bytes[*offset],
+						bytes[*offset + 1],
+						bytes[*offset + 2],
+						bytes[*offset + 3],
+					]);
+					let op = CIGAR_OPS[(cigar_enc & 0xF) as usize]; // Extract operation code
+					let length = cigar_enc >> 4; // Extract length
+
+					match op
+					{
+						'M' | '=' | 'X' =>
+						{
+							for j in 0..length as i32
+							{
+								let ref_pos = *ref_index + j;
+								*pileup_map.entry((ref_id, ref_pos)).or_insert(0) += 1;
+							}
+							*ref_index += length as i32;
+						}
+						'D' =>
+						{
+							*ref_index += length as i32;
+						}
+						_ =>
+						{}
+					}
+
+					cigar.push(bam::Cigar { length, opcode: op });
+					*offset += chunk_size; // Move to the next CIGAR operation
+				}
+			}
+		}
+
+		cigar
+	}
+
+	fn process_sequence(bytes: &[u8], l_seq: usize) -> String
+	{
+		let mut seq = String::with_capacity(l_seq); // Allocate enough space for the sequence
+
+		const CHUNK_SIZE: usize = 16; // SIMD width for u8
+
+		let mut offset = 0; // Initialize the byte offset
+
+		// Process the sequence in chunks
+		while offset < (l_seq + 1) / 2
+		{
+			let remaining = (l_seq + 1) / 2 - offset; // Remaining bytes to process
+			let to_process = remaining.min(CHUNK_SIZE);
+
+			// Load bytes into a SIMD register
+			let mut byte_chunk = [0u8; CHUNK_SIZE];
+			for i in 0..to_process
+			{
+				byte_chunk[i] = bytes[offset + i];
+			}
+
+			let bytes_simd = Simd::<u8, CHUNK_SIZE>::from_array(byte_chunk);
+
+			// Extract high and low nibbles using SIMD
+			let high_nibbles = (bytes_simd >> 4) & Simd::splat(0x0F); // High nibbles
+			let low_nibbles = bytes_simd & Simd::splat(0x0F); // Low nibbles
+
+			// Create an array to hold the corresponding bases
+			let mut bases = Vec::with_capacity(to_process * 2);
+
+			// Map the high nibbles to bases
+			for i in 0..to_process
+			{
+				bases.push(ALPHABET[high_nibbles[i] as usize]);
+				if 2 * i + 1 < l_seq
+				{
+					bases.push(ALPHABET[low_nibbles[i] as usize]);
+				}
+			}
+
+			// Update the sequence with the new bases
+			seq.push_str(&bases.iter().collect::<String>());
+
+			// Update the offset
+			offset += to_process;
+		}
+
+		// Trim the sequence to the exact length if necessary
+		seq.truncate(l_seq);
+
+		seq
+	}
+
+	fn process_quality_scores(bytes: &[u8], l_seq: usize) -> String
+	{
+		let mut qual = String::with_capacity(l_seq); // Pre-allocate the string capacity
+
+		// Process the quality scores in chunks
+		const CHUNK_SIZE: usize = 16; // This may vary based on your architecture
+		let mut i = 0;
+
+		// Process the sequence in chunks of SIMD width
+		while i < l_seq
+		{
+			// Determine how many bytes to process in this iteration
+			let remaining = l_seq - i;
+			let to_process = remaining.min(CHUNK_SIZE);
+
+			// Load bytes into a SIMD register
+			let mut byte_chunk = [0u8; CHUNK_SIZE]; // Create an array to hold the current chunk of bytes
+			byte_chunk[..to_process].copy_from_slice(&bytes[i..i + to_process]);
+
+			// Create a SIMD register from the byte chunk
+			let bytes_simd = Simd::<u8, CHUNK_SIZE>::from_array(byte_chunk);
+
+			// Add 33 to each byte to convert to ASCII
+			let adjusted_simd = bytes_simd + Simd::splat(33);
+
+			// Convert to characters and append to the string
+			for j in 0..to_process
+			{
+				qual.push(adjusted_simd[j] as char);
+			}
+
+			// Update the index
+			i += to_process;
+		}
+
+		qual
 	}
 
 	fn read_tags(
@@ -458,7 +631,7 @@ impl Reader
 				),
 				'Z' =>
 				{
-					match bytes[*offset..].iter().position(|&b| b == 0)
+					match Self::find_null_terminator_simd(&bytes[*offset..], offset)
 					{
 						Some(null_offset) =>
 						{
@@ -473,6 +646,21 @@ impl Reader
 							vec![bam::TagValueType::String(String::new())]
 						}
 					}
+					//match bytes[*offset..].iter().position(|&b| b == 0)
+					//{
+					//	Some(null_offset) =>
+					//	{
+					//		let string = &bytes[*offset..*offset + null_offset];
+					//		*offset += null_offset + 1; // Skip null terminator
+					//		vec![bam::TagValueType::String(unsafe {
+					//			std::str::from_utf8_unchecked(string).to_string()
+					//		})]
+					//	}
+					//	None =>
+					//	{
+					//		vec![bam::TagValueType::String(String::new())]
+					//	}
+					//}
 				}
 				'B' =>
 				{
@@ -591,6 +779,101 @@ impl Reader
 
 		*offset += array_len * std::mem::size_of::<T>();
 		array
+	}
+
+	fn read_byte_array_simd<T, F>(
+		bytes: &[u8],
+		offset: &mut usize,
+		array_len: usize,
+		convert: F,
+		to_bam_val: fn(T) -> bam::TagValueType,
+	) -> Vec<bam::TagValueType>
+	where
+		F: Fn(&[u8]) -> T,
+		T: Copy + Default + std::simd::SimdElement, // `T` must implement `Copy` and `Default` for the SIMD logic
+	{
+		const CHUNK_SIZE: usize = 8; // Simd<T, 8> processes 8 elements at once (adjust size for T)
+
+		let mut result = Vec::with_capacity(array_len);
+		let mut i = 0;
+
+		// SIMD processing
+		while i + CHUNK_SIZE * std::mem::size_of::<T>() <= array_len * std::mem::size_of::<T>()
+		{
+			let mut chunk_values = [T::default(); CHUNK_SIZE]; // Create an array of default `T`
+
+			for j in 0..CHUNK_SIZE
+			{
+				let byte_index = i + j * std::mem::size_of::<T>();
+				chunk_values[j] =
+					convert(&bytes[byte_index..byte_index + std::mem::size_of::<T>()]);
+			}
+
+			// Use SIMD to process these values
+			let simd_chunk = Simd::from_array(chunk_values); // Creates a SIMD vector from the array
+			for value in simd_chunk.to_array().iter()
+			{
+				result.push(to_bam_val(*value)); // Convert and push the result
+			}
+
+			i += CHUNK_SIZE * std::mem::size_of::<T>(); // Move forward by chunk size
+		}
+
+		// Scalar processing for remaining elements
+		while i + std::mem::size_of::<T>() <= array_len * std::mem::size_of::<T>()
+		{
+			let chunk = &bytes[i..i + std::mem::size_of::<T>()];
+			result.push(to_bam_val(convert(chunk)));
+			i += std::mem::size_of::<T>();
+		}
+
+		*offset += i;
+		result
+	}
+
+	fn find_null_terminator_simd(bytes: &[u8], offset: &mut usize) -> Option<usize>
+	{
+		const CHUNK_SIZE: usize = 16; // SIMD width: process 16 bytes at a time
+
+		let mut i = 0;
+
+		// SIMD processing loop
+		while i + CHUNK_SIZE <= bytes.len()
+		{
+			// Load 16 bytes at once using SIMD
+			let chunk = Simd::from_slice(&bytes[i..i + CHUNK_SIZE]);
+
+			// Compare against zero (null terminator)
+			let zeroes: Mask<_, 16> = chunk.simd_eq(Simd::splat(0));
+
+			// Check if any of the elements are zero using Mask::any
+			if zeroes.any()
+			{
+				// Convert the mask to a bitmask, then find the first `true` lane
+				let bitmask = zeroes.to_bitmask();
+				for j in 0..CHUNK_SIZE
+				{
+					if bitmask & (1 << j) != 0
+					{
+						return Some(i + j); // Return the position of the null byte
+					}
+				}
+			}
+
+			i += CHUNK_SIZE;
+		}
+
+		// Scalar processing for any remaining bytes
+		while i < bytes.len()
+		{
+			if bytes[i] == 0
+			{
+				return Some(i);
+			}
+			i += 1;
+		}
+
+		None // Null terminator not found
 	}
 
 	async fn read_bgzf_block(

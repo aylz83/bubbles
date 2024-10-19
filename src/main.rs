@@ -1,4 +1,4 @@
-use nimblefin::bam::reader::Reader;
+use bubbles::bam::reader::Reader;
 
 use std::path::Path;
 

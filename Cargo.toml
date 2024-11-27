@@ -2,6 +2,13 @@
 name = "bubbles"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+readme = "README.md"
+keywords = ["sequencing", "bioinformatics"]
+authors = ["Eilidh Ward"]
+categories = ["science", "filesystem"]
+description = "A terribly named, memory efficient, fast BAM file parser"
+repository = "https://github.com/aylz83/bubbles"
 
 [dependencies]
 anyhow = { version = "1.0.89", features = ["backtrace"] }

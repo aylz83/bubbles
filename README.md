@@ -1,6 +1,8 @@
 # bubbles
 A (terribly named) fast (and barebone!) BAM parser and pileup rust crate making use of SIMD
 
+![bubbles logo](assets/bubbles.png)
+
 This is a rust-based BAM parser with pileup capabilities and aimed to be as fast as possible while using as little memory as possible.
 Full pileup approximately takes ~~~90 seconds~~ ~68 seconds using some SIMD in some places on a 1.7GB BAM (102,650,976 reads)
 It is/was a learning exercise and it is absoluely missing some features and may not handle all BAM files.

@@ -1,7 +1,7 @@
 [package]
 name = "bubbles"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 license = "MIT"
 readme = "README.md"
 keywords = ["sequencing", "bioinformatics"]
@@ -11,18 +11,12 @@ description = "A terribly named, memory efficient, fast BAM file parser"
 repository = "https://github.com/aylz83/bubbles"
 
 [dependencies]
-anyhow = { version = "1.0.89", features = ["backtrace"] }
 async-compression = { version = "0.4.12", features = ["gzip", "tokio"] }
-env_logger = "0.11.5"
+async-trait = "0.1.86"
+byteorder = "1.5.0"
 futures = "0.3.30"
 log = "0.4.22"
 rustc-hash = "2.0.0"
+thiserror = "2.0.11"
 tokio = { version = "1.40.0", features = ["full"] }
-
-[lib]
-name = "bubbles"
-path = "src/lib.rs"
-
-[[bin]]
-name = "bubbles_example"
-path = "src/main.rs"
+pufferfish = { path = "../pufferfish-rs" }

@@ -11,13 +11,13 @@ async fn main() -> anyhow::Result<()>
 	// use tid in field and pileup
 	// add star juncrion reading
 	//
-	let pileup = bam::Builder::new("sample.bam")
+	let pileup = bam::Builder::from_path("sample.bam")
 		.await?
 		//.add_fetch_region(bam::FetchRegion::NamedTid("chr2"))?
-		.add_fetch_region(bam::FetchRegion::NamedTidRegion(
-			"chr2", 119998389, 201064349,
-		))?
-		.fetch_reads(|mut read| {
+		//.add_fetch_region(bam::FetchRegion::NamedTidRegion(
+		//	"chr2", 119998389, 201064349,
+		//))?
+		.fetch_reads(|mut read, header| {
 			read_count += 1;
 			println!("seqname = {:?}", read.ref_id);
 			//println!("read seq = {:?}", unsafe {

@@ -12,6 +12,7 @@ use log::debug;
 use crate::error;
 use crate::bai;
 use crate::bam;
+use crate::AsyncReadSeek;
 
 use pufferfish::BGZ;
 
@@ -33,17 +34,19 @@ pub(crate) struct RegionWithLimits
 	tid: u32,
 }
 
-pub struct Builder
+pub struct Builder<R>
+where
+	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
-	reader: TokioBufReader<TokioFile>,
+	reader: TokioBufReader<R>,
 	regions: Vec<RegionWithLimits>,
 	header: crate::bam::Header,
 	bai_reader: Option<crate::bai::Reader>,
 }
 
-impl Builder
+impl Builder<TokioFile>
 {
-	pub async fn new<P>(path: P) -> error::Result<Self>
+	pub async fn from_path<P>(path: P) -> error::Result<Self>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
@@ -73,6 +76,50 @@ impl Builder
 
 		Ok(Builder {
 			reader,
+			regions: Vec::new(),
+			header,
+			bai_reader,
+		})
+	}
+}
+
+impl<R> Builder<R>
+where
+	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+{
+	pub async fn from_reader(reader: R, bai_reader: Option<R>) -> error::Result<Self>
+	{
+		let mut async_reader = TokioBufReader::new(reader);
+
+		let bai_reader = match bai_reader
+		{
+			Some(reader) =>
+			{
+				debug!("Setting up for indexed reading");
+				Some(bai::Reader::from_reader(reader).await?)
+			}
+			None =>
+			{
+				debug!("BAI file doesn't exist, disabling BAM search");
+				None
+			}
+		};
+
+		/*let bai_reader = if bai_file.exists()
+		{
+			debug!("Setting up for indexed reading");
+			Some(bai::Reader::from_path(&bai_file).await?)
+		}
+		else
+		{
+			debug!("BAI file doesn't exist, disabling BAM search");
+			None
+		};*/
+
+		let header = crate::bam::read_bam_header(&mut async_reader).await?;
+
+		Ok(Builder {
+			reader: async_reader,
 			regions: Vec::new(),
 			header,
 			bai_reader,
@@ -152,7 +199,7 @@ impl Builder
 
 	pub async fn fetch_reads<F>(&mut self, mut read_fn: F) -> error::Result<Vec<bam::Pileup>>
 	where
-		F: FnMut(bam::Field) -> Option<bam::Field>,
+		F: FnMut(bam::Field, &mut crate::bam::Header) -> Option<bam::Field>,
 	{
 		let mut reads = Vec::<bam::Field>::new();
 
@@ -211,6 +258,7 @@ impl Builder
 						Some(region.tid),
 						&region.limits,
 						&mut coverage,
+						&mut self.header,
 					)
 					.await?
 					{
@@ -282,6 +330,7 @@ impl Builder
 							Some(region.tid),
 							&region.limits,
 							&mut coverage,
+							&mut self.header,
 						)
 						.await?
 						{

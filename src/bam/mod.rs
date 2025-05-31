@@ -27,8 +27,8 @@ const ALPHABET: [char; 16] = [
 	'=', 'A', 'C', 'M', 'G', 'R', 'S', 'V', 'T', 'W', 'Y', 'H', 'K', 'D', 'B', 'N',
 ];
 
-use tokio::fs::File as TokioFile;
 use tokio::io::BufReader as TokioBufReader;
+use tokio::io::AsyncRead;
 
 #[derive(Debug)]
 pub enum TagValueType
@@ -108,8 +108,17 @@ pub struct Header
 	pub references: Vec<TID>,
 }
 
-pub(crate) async fn read_bam_header(reader: &mut TokioBufReader<TokioFile>)
-	-> error::Result<Header>
+impl Header
+{
+	pub fn ref_name(&self, ref_id: i32) -> Option<&TID>
+	{
+		self.references.get(ref_id as usize)
+	}
+}
+
+pub(crate) async fn read_bam_header<R>(reader: &mut TokioBufReader<R>) -> error::Result<Header>
+where
+	R: AsyncRead + Send + std::marker::Unpin,
 {
 	let bytes = match reader.read_bgzf_block(Some(pufferfish::is_bam_eof)).await?
 	{
@@ -199,10 +208,11 @@ pub(crate) async fn read_bam_block<F>(
 	tid: Option<u32>,
 	region: &Option<Range<u64>>,
 	coverage: &mut BTreeSet<u64>,
+	header: &mut Header,
 ) -> error::Result<Option<()>>
 // Result due to some functions have the possibility to fail, and Option so we can detect None = EOF
 where
-	F: FnMut(Field) -> Option<Field>,
+	F: FnMut(Field, &mut Header) -> Option<Field>,
 {
 	let mut offset: usize = 0;
 	let mut start_block_offset: usize;
@@ -249,8 +259,8 @@ where
 			{
 				debug!(
 					"breaking, tid = {}, ref_tid = {}, region.start = {}, region.end = {}, pos = \
-					 {}",
-					tid, ref_id, region.start, region.end, pos
+					 {}, block_size = {}",
+					tid, ref_id, region.start, region.end, pos, block_size
 				);
 				offset += (block_size - 3 - 4 - 4) as usize;
 				continue;
@@ -401,7 +411,7 @@ where
 			tags: tags_vec,
 		};
 
-		if let Some(keep_read) = read_fn(read)
+		if let Some(keep_read) = read_fn(read, header)
 		{
 			reads.push(keep_read);
 		}

@@ -11,6 +11,7 @@ use log::debug;
 
 use crate::bai::{Header, Region, Reference};
 use crate::error;
+use crate::AsyncReadSeek;
 
 pub(crate) struct Reader
 {
@@ -19,12 +20,11 @@ pub(crate) struct Reader
 
 impl Reader
 {
-	pub async fn from_path(path: &Path) -> error::Result<Reader>
+	pub async fn from_reader<R>(reader: R) -> error::Result<Reader>
+	where
+		R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 	{
-		let bai_file = TokioFile::open(path)
-			.await
-			.map_err(|_| error::Error::IOError(path.to_string_lossy().to_string()))?;
-		let mut reader = TokioBufReader::new(bai_file);
+		let mut reader = TokioBufReader::new(reader);
 
 		let mut bytes = [0u8; 4];
 		reader
@@ -140,5 +140,14 @@ impl Reader
 		}
 
 		Ok(Reader { ref_indices })
+	}
+
+	pub async fn from_path(path: &Path) -> error::Result<Reader>
+	{
+		let bai_file = TokioFile::open(path)
+			.await
+			.map_err(|_| error::Error::IOError(path.to_string_lossy().to_string()))?;
+
+		Self::from_reader(bai_file).await
 	}
 }

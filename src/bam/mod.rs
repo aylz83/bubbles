@@ -701,37 +701,60 @@ fn read_tags(
 		// Parse value based on type
 		let value = match val_type
 		{
-			'A' => read_value(bytes, offset, |chunk| chunk[0] as char, TagValueType::Char),
-			'c' => read_value(bytes, offset, |chunk| chunk[0] as i8, TagValueType::I8),
-			'C' => read_value(bytes, offset, |chunk| chunk[0], TagValueType::U8),
+			'A' => read_value(
+				bytes,
+				offset,
+				|chunk| chunk[0] as char,
+				1,
+				TagValueType::Char,
+			),
+			'c' => read_value(
+				bytes,
+				offset,
+				|chunk| chunk[0] as i8,
+				std::mem::size_of::<i8>(),
+				TagValueType::I8,
+			),
+			'C' => read_value(
+				bytes,
+				offset,
+				|chunk| chunk[0],
+				std::mem::size_of::<u8>(),
+				TagValueType::U8,
+			),
 			's' => read_value(
 				bytes,
 				offset,
 				|chunk| i16::from_le_bytes([chunk[0], chunk[1]]),
+				std::mem::size_of::<i16>(),
 				TagValueType::I16,
 			),
 			'S' => read_value(
 				bytes,
 				offset,
 				|chunk| u16::from_le_bytes([chunk[0], chunk[1]]),
+				std::mem::size_of::<u16>(),
 				TagValueType::U16,
 			),
 			'i' => read_value(
 				bytes,
 				offset,
 				|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+				std::mem::size_of::<i32>(),
 				TagValueType::I32,
 			),
 			'I' => read_value(
 				bytes,
 				offset,
 				|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+				std::mem::size_of::<u32>(),
 				TagValueType::U32,
 			),
 			'f' => read_value(
 				bytes,
 				offset,
 				|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+				std::mem::size_of::<f32>(),
 				TagValueType::F32,
 			),
 			'Z' =>
@@ -835,9 +858,14 @@ fn read_tags(
 				}
 			}
 
-			_ => return Err(error::Error::BamArrayTag(val_type)),
+			_ =>
+			{
+				debug!("tag error = {}:{}", &tag, val_type);
+				return Err(error::Error::BamArrayTag(val_type));
+			}
 		};
 
+		debug!("tag = {}:{}:{:?}", &tag, val_type, &value);
 		// 10-15 seconds slower in some cases when adding to tags
 		// find more efficient way, or add option to not parse tags
 		tags.push(Tag {
@@ -845,8 +873,6 @@ fn read_tags(
 			val_type,
 			value,
 		});
-
-		//debug!("tag = {}:{}:{:?}", &tag, val_type, &value);
 	}
 
 	Ok(())
@@ -856,13 +882,14 @@ fn read_value<T, F>(
 	bytes: &[u8],
 	offset: &mut usize,
 	convert: F,
+	size: usize,
 	to_bam_val: fn(T) -> TagValueType,
 ) -> Vec<TagValueType>
 where
 	F: Fn(&[u8]) -> T,
 {
-	let value = convert(&bytes[*offset..*offset + std::mem::size_of::<T>()]);
-	*offset += std::mem::size_of::<T>();
+	let value = convert(&bytes[*offset..*offset + size]);
+	*offset += size;
 	vec![to_bam_val(value)]
 }
 

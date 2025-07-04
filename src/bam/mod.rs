@@ -30,6 +30,19 @@ const ALPHABET: [char; 16] = [
 use tokio::io::BufReader as TokioBufReader;
 use tokio::io::AsyncRead;
 
+use bitflags::bitflags;
+
+bitflags! {
+	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+	pub struct BamFeatures: u32 {
+		const READNAMES = 0b0001;
+		const SEQUENCES = 0b0010;
+		const CIGAR = 0b0100;
+		const TAGS = 0b1000;
+		const EMPTY = 0b0000;
+	}
+}
+
 #[derive(Debug)]
 pub enum TagValueType
 {
@@ -94,11 +107,11 @@ pub struct Field
 	pub next_pos: i32,
 	pub tlen: i32,
 
-	pub read_name: String,
-	pub sequence: String,
-	pub sequence_quality: String,
-	pub cigar: Vec<Cigar>,
-	pub tags: Vec<Tag>,
+	pub read_name: Option<String>,
+	pub sequence: Option<String>,
+	pub sequence_quality: Option<String>,
+	pub cigar: Option<Vec<Cigar>>,
+	pub tags: Option<Vec<Tag>>,
 }
 
 #[derive(Debug)]
@@ -205,6 +218,7 @@ pub(crate) async fn read_bam_block<F>(
 	reads: &mut Vec<Field>,
 	//pileup_map: &mut FxHashMap<(i32, i32), u64>,
 	mut read_fn: F,
+	features: Option<&BamFeatures>,
 	tid: Option<u32>,
 	region: &Option<Range<u64>>,
 	coverage: &mut BTreeSet<u64>,
@@ -352,48 +366,93 @@ where
 		offset += 4;
 
 		// read_name - char[l_read_name]
-		let read_name = &bytes[offset + 1..offset + 1 + l_read_name as usize];
-		debug!("read_name = {}", unsafe {
-			std::str::from_utf8_unchecked(read_name).to_string()
-		});
+		let read_name = if features.map_or(false, |f| f.contains(BamFeatures::READNAMES))
+		{
+			let r_name = &bytes[offset + 1..offset + 1 + l_read_name as usize];
+			Some(unsafe { std::str::from_utf8_unchecked(r_name).to_string() })
+		}
+		else
+		{
+			None
+		};
+
+		debug!("read_name = {:?}", read_name);
 
 		offset += 1 + l_read_name as usize;
 
 		// cigar - uint32_t[n_cigar_op]
 		let mut ref_index = pos;
-		let cigar = process_cigar(
-			&bytes,
-			&mut offset,
-			n_cigar_op as usize,
-			ref_id,
-			&mut ref_index,
-			//pileup_map,
-			coverage,
-		);
+		let cigar = if features.map_or(false, |f| f.contains(BamFeatures::CIGAR))
+		{
+			Some(process_cigar(
+				&bytes,
+				&mut offset,
+				n_cigar_op as usize,
+				ref_id,
+				&mut ref_index,
+				//pileup_map,
+				coverage,
+			))
+		}
+		else
+		{
+			offset += n_cigar_op as usize * 4;
+			None
+		};
 
 		debug!("cigar = {:?}", cigar);
 
 		// seq - uint8_t[(l_seq + 1) / 2]
-		let seq = process_sequence(&bytes[offset..(offset + l_seq as usize)], l_seq as usize);
+		let seq = if features.map_or(false, |f| f.contains(BamFeatures::SEQUENCES))
+		{
+			Some(process_sequence(
+				&bytes[offset..(offset + l_seq as usize)],
+				l_seq as usize,
+			))
+		}
+		else
+		{
+			None
+		};
 
 		debug!("seq = {:?}", &seq);
 
 		offset += (l_seq as usize + 1) / 2;
 
 		// qual - char[l_seq]
-		let qual = process_quality_scores(&bytes[offset..offset + l_seq as usize], l_seq as usize);
+		let qual = if features.map_or(false, |f| f.contains(BamFeatures::SEQUENCES))
+		{
+			Some(process_quality_scores(
+				&bytes[offset..offset + l_seq as usize],
+				l_seq as usize,
+			))
+		}
+		else
+		{
+			None
+		};
 
 		debug!("qual = {:?}", qual);
 
 		offset += l_seq as usize;
 
-		let mut tags_vec = Vec::<Tag>::with_capacity(10);
-		read_tags(
-			&bytes,
-			start_block_offset + block_size as usize,
-			&mut offset,
-			&mut tags_vec,
-		)?;
+		let tags_vec = if features.map_or(false, |f| f.contains(BamFeatures::TAGS))
+		{
+			let mut tags = Vec::<Tag>::with_capacity(10);
+			read_tags(
+				&bytes,
+				start_block_offset + block_size as usize,
+				&mut offset,
+				&mut tags,
+			)?;
+
+			Some(tags)
+		}
+		else
+		{
+			offset = start_block_offset + block_size as usize + 4;
+			None
+		};
 
 		let read = Field {
 			ref_id,
@@ -404,7 +463,7 @@ where
 			next_ref_id,
 			next_pos,
 			tlen,
-			read_name: unsafe { std::str::from_utf8_unchecked(read_name).to_string() },
+			read_name: read_name,
 			sequence: seq,
 			sequence_quality: qual,
 			cigar: cigar,
@@ -429,28 +488,31 @@ fn generate_pileup(reads: &Vec<Field>) -> FxHashMap<(i32, i32), u64>
 		let mut ref_pos = read.pos;
 		//let mut seq_pos = 0;
 
-		for cigar in &read.cigar
+		if let Some(cigar_ops) = &read.cigar
 		{
-			match cigar
+			for cigar in cigar_ops
 			{
-				Cigar::Match(length) =>
+				match cigar
 				{
-					for i in 0..*length
+					Cigar::Match(length) =>
 					{
-						let pos_key = (read.ref_id, ref_pos + i as i32);
-						// let base = read.sequence.chars().nth(seq_pos as usize).unwrap_or('N') as u8;
-						*pileup.entry(pos_key).or_insert(0) += 1;
-						//seq_pos += 1;
+						for i in 0..*length
+						{
+							let pos_key = (read.ref_id, ref_pos + i as i32);
+							// let base = read.sequence.chars().nth(seq_pos as usize).unwrap_or('N') as u8;
+							*pileup.entry(pos_key).or_insert(0) += 1;
+							//seq_pos += 1;
+						}
+						ref_pos += *length as i32;
 					}
-					ref_pos += *length as i32;
+					Cigar::Deletion(length) =>
+					{
+						// Move reference position forward (gap in query)
+						ref_pos += *length as i32;
+					}
+					_ =>
+					{}
 				}
-				Cigar::Deletion(length) =>
-				{
-					// Move reference position forward (gap in query)
-					ref_pos += *length as i32;
-				}
-				_ =>
-				{}
 			}
 		}
 	}

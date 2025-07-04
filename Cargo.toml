@@ -11,7 +11,6 @@ description = "A terribly named, memory efficient, fast BAM file parser"
 repository = "https://github.com/aylz83/bubbles"
 
 [dependencies]
-async-compression = { version = "0.4.12", features = ["gzip", "tokio"] }
 async-trait = "0.1.86"
 byteorder = "1.5.0"
 futures = "0.3.30"
@@ -20,3 +19,4 @@ rustc-hash = "2.0.0"
 thiserror = "2.0.11"
 tokio = { version = "1.40.0", features = ["full"] }
 pufferfish = { path = "../pufferfish-rs" }
+bitflags = "2.9.1"

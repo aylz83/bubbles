@@ -1,5 +1,3 @@
-use bubbles::bam;
-
 use std::io::Cursor;
 
 #[tokio::main]
@@ -21,20 +19,23 @@ async fn main() -> anyhow::Result<()>
 		.expect("not bam format");
 
 	let pileup = bam
-		.fetch_reads(|read, header| {
-			read_count += 1;
+		.fetch_reads(
+			|read, _| {
+				read_count += 1;
 
-			/*let len = read.sequence.len();
-			read_lengths.push(len);
+				/*let len = read.sequence.len();
+				read_lengths.push(len);
 
-			let ref_id = read.ref_id;
-			if let Some(rid) = header.ref_name(ref_id)
-			{
-				*ref_counts.entry(rid.name.clone()).or_insert(0) += 1;
-			}*/
+				let ref_id = read.ref_id;
+				if let Some(rid) = header.ref_name(ref_id)
+				{
+					*ref_counts.entry(rid.name.clone()).or_insert(0) += 1;
+				}*/
 
-			Some(read)
-		})
+				Some(read)
+			},
+			Some(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES),
+		)
 		.await
 		.expect("unable to read sequences");
 

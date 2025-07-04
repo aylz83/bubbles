@@ -197,7 +197,11 @@ where
 		Ok(self)
 	}
 
-	pub async fn fetch_reads<F>(&mut self, mut read_fn: F) -> error::Result<Vec<bam::Pileup>>
+	pub async fn fetch_reads<F>(
+		&mut self,
+		mut read_fn: F,
+		features: Option<bam::BamFeatures>,
+	) -> error::Result<Vec<bam::Pileup>>
 	where
 		F: FnMut(bam::Field, &mut crate::bam::Header) -> Option<bam::Field>,
 	{
@@ -226,6 +230,7 @@ where
 					&mut bytes,
 					&mut reads,
 					&mut read_fn,
+					features.as_ref(),
 					None,  // No tid filter
 					&None, // No position limits
 					&mut coverage,
@@ -247,32 +252,93 @@ where
 
 				for offset in &region.region
 				{
-					let mut coverage = BTreeSet::<u64>::new();
-
-					for offset in &region.region
+					if let Some(limits) = &region.limits
 					{
-						if let Some(limits) = &region.limits
+						if (limits.start..limits.end).all(|pos| coverage.contains(&pos))
 						{
-							if (limits.start..limits.end).all(|pos| coverage.contains(&pos))
+							break;
+						}
+					}
+
+					let (block_start, virtual_start) = (offset.start >> 16, offset.start & 0xFFFF);
+					let (block_end, virtual_end) = (offset.end >> 16, offset.end & 0xFFFF);
+
+					debug!("virtual_start = {}", virtual_start);
+					debug!("virtual_end = {}", virtual_end);
+
+					self.reader
+						.seek(SeekFrom::Start(block_start))
+						.await
+						.map_err(|_| error::Error::BamSeek(block_start))?;
+
+					if block_start == block_end
+					{
+						let mut bytes = match self
+							.reader
+							.read_bgzf_block(Some(pufferfish::is_bam_eof))
+							.await
+						{
+							Ok(bytes) => match bytes
 							{
+								Some(bytes) => bytes,
+								None => break,
+							},
+							Err(err) => return Err(err.into()),
+						};
+
+						let mut seek_bytes = vec![0u8; (virtual_end - virtual_start) as usize];
+						let mut cursor = Cursor::new(&mut bytes);
+						Seek::seek(&mut cursor, SeekFrom::Start(virtual_start))
+							.map_err(|_| error::Error::BamFormat)?;
+						std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
+							.map_err(|_| error::Error::BamFormat)?;
+
+						match bam::read_bam_block(
+							&mut bytes,
+							&mut reads,
+							//&mut pileup,
+							&mut read_fn,
+							features.as_ref(),
+							Some(region.tid),
+							&region.limits,
+							&mut coverage,
+							&mut self.header,
+						)
+						.await?
+						{
+							Some(_bam_block) =>
+							{}
+							None =>
+							{
+								debug!("BAM EOF!");
 								break;
 							}
 						}
+					}
+					else
+					{
+						let mut current_position = block_start;
 
-						let (block_start, virtual_start) =
-							(offset.start >> 16, offset.start & 0xFFFF);
-						let (block_end, virtual_end) = (offset.end >> 16, offset.end & 0xFFFF);
-
-						debug!("virtual_start = {}", virtual_start);
-						debug!("virtual_end = {}", virtual_end);
-
-						self.reader
-							.seek(SeekFrom::Start(block_start))
-							.await
-							.map_err(|_| error::Error::BamSeek(block_start))?;
-
-						if block_start == block_end
+						while current_position <= block_end
 						{
+							let start_offset = if current_position == block_start
+							{
+								virtual_start
+							}
+							else
+							{
+								0
+							};
+
+							let end_offset = if current_position == block_end
+							{
+								virtual_end
+							}
+							else
+							{
+								u64::MAX
+							};
+
 							let mut bytes = match self
 								.reader
 								.read_bgzf_block(Some(pufferfish::is_bam_eof))
@@ -286,18 +352,27 @@ where
 								Err(err) => return Err(err.into()),
 							};
 
-							let mut seek_bytes = vec![0u8; (virtual_end - virtual_start) as usize];
-							let mut cursor = Cursor::new(&mut bytes);
-							Seek::seek(&mut cursor, SeekFrom::Start(virtual_start))
-								.map_err(|_| error::Error::BamFormat)?;
-							std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
-								.map_err(|_| error::Error::BamFormat)?;
+							let block_len = bytes.len() as u64;
+							let start_offset = start_offset.min(block_len);
+							let end_offset = end_offset.min(block_len);
+
+							if start_offset < end_offset
+							{
+								let mut seek_bytes =
+									vec![0u8; (end_offset - start_offset) as usize];
+								let mut cursor = Cursor::new(&mut bytes);
+								Seek::seek(&mut cursor, SeekFrom::Start(start_offset))
+									.map_err(|_| error::Error::BamFormat)?;
+								std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
+									.map_err(|_| error::Error::BamFormat)?;
+							}
 
 							match bam::read_bam_block(
 								&mut bytes,
 								&mut reads,
 								//&mut pileup,
 								&mut read_fn,
+								features.as_ref(),
 								Some(region.tid),
 								&region.limits,
 								&mut coverage,
@@ -313,88 +388,14 @@ where
 									break;
 								}
 							}
+
+							current_position = self
+								.reader
+								.seek(SeekFrom::Current(0))
+								.await
+								.map_err(|_| error::Error::BamFormat)?;
 						}
-						else
-						{
-							let mut current_position = block_start;
-
-							while current_position <= block_end
-							{
-								let start_offset = if current_position == block_start
-								{
-									virtual_start
-								}
-								else
-								{
-									0
-								};
-
-								let end_offset = if current_position == block_end
-								{
-									virtual_end
-								}
-								else
-								{
-									u64::MAX
-								};
-
-								let mut bytes = match self
-									.reader
-									.read_bgzf_block(Some(pufferfish::is_bam_eof))
-									.await
-								{
-									Ok(bytes) => match bytes
-									{
-										Some(bytes) => bytes,
-										None => break,
-									},
-									Err(err) => return Err(err.into()),
-								};
-
-								let block_len = bytes.len() as u64;
-								let start_offset = start_offset.min(block_len);
-								let end_offset = end_offset.min(block_len);
-
-								if start_offset < end_offset
-								{
-									let mut seek_bytes =
-										vec![0u8; (end_offset - start_offset) as usize];
-									let mut cursor = Cursor::new(&mut bytes);
-									Seek::seek(&mut cursor, SeekFrom::Start(start_offset))
-										.map_err(|_| error::Error::BamFormat)?;
-									std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
-										.map_err(|_| error::Error::BamFormat)?;
-								}
-
-								match bam::read_bam_block(
-									&mut bytes,
-									&mut reads,
-									//&mut pileup,
-									&mut read_fn,
-									Some(region.tid),
-									&region.limits,
-									&mut coverage,
-									&mut self.header,
-								)
-								.await?
-								{
-									Some(_bam_block) =>
-									{}
-									None =>
-									{
-										debug!("BAM EOF!");
-										break;
-									}
-								}
-
-								current_position = self
-									.reader
-									.seek(SeekFrom::Current(0))
-									.await
-									.map_err(|_| error::Error::BamFormat)?;
-							}
-						};
-					}
+					};
 				}
 			}
 		}

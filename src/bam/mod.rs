@@ -2,11 +2,9 @@
 
 mod builder;
 mod pileup;
-mod reader;
 
 pub use crate::bam::builder::*;
 pub use crate::bam::pileup::*;
-pub use crate::bam::reader::*;
 
 use crate::error;
 

@@ -75,17 +75,21 @@ async fn main()
 
 	println!("read count = {}", read_count);
 
-	println!("first 10 pileup positions:");
-	let to_break = 10;
-	for (index, pileup) in pileup.iter().enumerate()
-	{
-		if index == to_break
-		{
-			break;
-		}
 
-		println!("tid {}:pos {} = {}", pileup.tid, pileup.pos, pileup.score);
-	}
+  if let Some(pileup) = pileup
+  {
+  	println!("first 10 pileup positions:");
+  	let to_break = 10;
+  	for (index, pileup) in pileup.iter().enumerate()
+  	{
+  		if index == to_break
+  		{
+  			break;
+  		}
+
+  		println!("tid {}:pos {} = {}", pileup.tid, pileup.pos, pileup.score);
+  	}
+  }
 
 	Ok(())
 }

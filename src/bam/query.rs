@@ -33,7 +33,7 @@ pub(crate) struct RegionWithLimits
 	tid: u32,
 }
 
-pub struct Builder<R>
+pub struct AsyncBamQuery<R>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
@@ -44,15 +44,13 @@ where
 	features: Option<crate::bam::BamFeatures>,
 }
 
-impl Builder<TokioFile>
+impl AsyncBamQuery<TokioFile>
 {
 	pub async fn from_path<P>(path: P) -> error::Result<Self>
 	where
 		P: AsRef<Path> + std::marker::Copy,
 	{
-		let file = TokioFile::open(path)
-			.await
-			.map_err(|_| error::Error::IOError(path.as_ref().to_string_lossy().to_string()))?;
+		let file = TokioFile::open(path).await?;
 
 		let mut reader = TokioBufReader::new(file);
 
@@ -74,7 +72,7 @@ impl Builder<TokioFile>
 
 		let header = crate::bam::read_bam_header(&mut reader).await?;
 
-		Ok(Builder {
+		Ok(AsyncBamQuery {
 			reader,
 			regions: Vec::new(),
 			header,
@@ -84,7 +82,7 @@ impl Builder<TokioFile>
 	}
 }
 
-impl<R> Builder<R>
+impl<R> AsyncBamQuery<R>
 where
 	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
 {
@@ -108,7 +106,7 @@ where
 
 		let header = crate::bam::read_bam_header(&mut async_reader).await?;
 
-		Ok(Builder {
+		Ok(AsyncBamQuery {
 			reader: async_reader,
 			regions: Vec::new(),
 			header,
@@ -201,7 +199,7 @@ where
 		Ok(self)
 	}
 
-	pub async fn fetch_reads<F>(
+	pub async fn query_reads<F>(
 		&mut self,
 		mut read_fn: F,
 	) -> error::Result<Option<Vec<bam::Pileup>>>
@@ -245,11 +243,8 @@ where
 				.read_bgzf_block(Some(pufferfish::is_bam_eof))
 				.await
 			{
-				Ok(bytes) => match bytes
-				{
-					Some(bytes) => bytes,
-					None => break,
-				},
+				Ok(Some(bytes)) => bytes,
+				Ok(None) => break,
 				Err(err) => return Err(err.into()),
 			};
 
@@ -316,11 +311,8 @@ where
 						.read_bgzf_block(Some(pufferfish::is_bam_eof))
 						.await
 					{
-						Ok(bytes) => match bytes
-						{
-							Some(bytes) => bytes,
-							None => break,
-						},
+						Ok(Some(bytes)) => bytes,
+						Ok(None) => break,
 						Err(err) => return Err(err.into()),
 					};
 
@@ -382,11 +374,8 @@ where
 							.read_bgzf_block(Some(pufferfish::is_bam_eof))
 							.await
 						{
-							Ok(bytes) => match bytes
-							{
-								Some(bytes) => bytes,
-								None => break,
-							},
+							Ok(Some(bytes)) => bytes,
+							Ok(None) => break,
 							Err(err) => return Err(err.into()),
 						};
 

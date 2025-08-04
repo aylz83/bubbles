@@ -144,9 +144,7 @@ impl Reader
 
 	pub async fn from_path(path: &Path) -> error::Result<Reader>
 	{
-		let bai_file = TokioFile::open(path)
-			.await
-			.map_err(|_| error::Error::IOError(path.to_string_lossy().to_string()))?;
+		let bai_file = TokioFile::open(path).await?;
 
 		Self::from_reader(bai_file).await
 	}

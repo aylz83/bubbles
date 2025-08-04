@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-mod builder;
 mod cigar;
 mod header;
 mod pileup;
+mod query;
 mod tags;
 
-pub use crate::bam::builder::*;
+pub use crate::bam::query::*;
 pub use crate::bam::pileup::*;
 pub use crate::bam::cigar::*;
 pub use crate::bam::tags::*;
@@ -83,7 +83,6 @@ impl Field
 pub(crate) async fn read_bam_block<F>(
 	bytes: &mut [u8],
 	reads: &mut Vec<Field>,
-	//pileup_map: &mut FxHashMap<(i32, i32), u64>,
 	mut read_fn: F,
 	features: Option<&BamFeatures>,
 	tid: Option<u32>,
@@ -100,7 +99,7 @@ where
 	while offset < bytes.len()
 	{
 		start_block_offset = offset;
-		debug!("offset = {}", offset);
+
 		let block_size = u32::from_le_bytes([
 			bytes[offset],
 			bytes[offset + 1],
@@ -305,7 +304,11 @@ where
 
 		let tags_vec = if features.map_or(false, |f| f.contains(BamFeatures::TAGS))
 		{
-			let mut tags = Vec::<Tag>::with_capacity(10);
+			let tag_bytes = start_block_offset + block_size as usize - offset;
+			let estimated_num_tags = tag_bytes / 8;
+
+			let mut tags = Vec::<Tag>::with_capacity(estimated_num_tags);
+
 			read_tags(
 				&bytes,
 				start_block_offset + block_size as usize,

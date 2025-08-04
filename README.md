@@ -23,7 +23,7 @@ async fn main()
 	let mut read_count = 0;
 
 	// Automatically searches for a sample.bam.bai, but this can optionall be supplied with set_bai if the path/name differs
-	let pileup = bam::Builder::from_path("sample.bam")
+	let pileup = bam::AsyncBamQuery::from_path("sample.bam")
 	.await
 	.expect("Unable to open BAM")
 	// Fetch all of chromosome 3
@@ -38,7 +38,7 @@ async fn main()
 	.expect("Unable to add search region")
 	// what features to request, omitting this enables all BAM featurs
 	.set_bam_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
-	.fetch_reads(
+	.query_reads(
 		|read, header|
 		{
 			read_count += 1;
@@ -63,13 +63,12 @@ async fn main()
 	// Alternatively, a builder can be opened as follows:
 	// let bam_buffer = ... Some aysnc BufReader pointing to memory or a stream
 	// let bai_buffer = ... Some aysnc BufReader pointing to memory or a stream
-	// let builder = bam::Builder::from_reader(bam_buffer, Some(bai_buffer)).await.expect("unable to open");
-	// Or if you don't wish to suppoy BAI data
-	// let builder = bam::Builder::from_reader(bam_buffer, None).await.expect("unable to open");
-	// Do something with builder (set_features, add_fetch_region, fetch_reads etc)...
+	// let query = bam::AsyncBamQuery::from_reader(bam_buffer, Some(bai_buffer)).await.expect("unable to open");
+	// Or if you don't wish to supply BAI data
+	// let query = bam::AsyncBamQuery::from_reader(bam_buffer, None).await.expect("unable to open");
+	// Do something with query (set_features, add_fetch_region, fetch_reads etc)...
 
 	println!("read count = {}", read_count);
-
 
 	if let Some(pileup) = pileup
 	{

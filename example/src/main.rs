@@ -10,14 +10,14 @@ async fn main() -> anyhow::Result<()>
 	let data = std::fs::read("sample.bam")?;
 
 	let cursor = Cursor::new(data);
-	let mut bam = bubbles::bam::Builder::from_reader(cursor, None)
+	let mut bam = bubbles::bam::AsyncBamQuery::from_reader(cursor, None)
 		.await
 		.expect("not bam format");
 
 	let pileup = bam
 		// add BamFeatures::PILEUP to return pileup data
 		.set_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
-		.fetch_reads(|read, _| {
+		.query_reads(|read, _| {
 			read_count += 1;
 
 			/*let len = read.sequence.len();

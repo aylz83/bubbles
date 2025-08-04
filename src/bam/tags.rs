@@ -22,7 +22,7 @@ pub enum TagValueType
 pub struct Tag
 {
 	pub name: Box<[u8]>,
-	pub val_type: char,
+	pub val_type: u8,
 	pub value: Vec<TagValueType>,
 }
 
@@ -49,69 +49,69 @@ pub(crate) fn read_tags(
 		*offset += 2;
 
 		// val_type (char)
-		let val_type = bytes[*offset] as char;
+		let val_type = bytes[*offset];
 		*offset += 1;
 
 		// Parse value based on type
 		let value = match val_type
 		{
-			'A' => read_value(
+			b'A' => read_value(
 				bytes,
 				offset,
 				|chunk| chunk[0] as char,
 				1,
 				TagValueType::Char,
 			),
-			'c' => read_value(
+			b'c' => read_value(
 				bytes,
 				offset,
 				|chunk| chunk[0] as i8,
 				std::mem::size_of::<i8>(),
 				TagValueType::I8,
 			),
-			'C' => read_value(
+			b'C' => read_value(
 				bytes,
 				offset,
 				|chunk| chunk[0],
 				std::mem::size_of::<u8>(),
 				TagValueType::U8,
 			),
-			's' => read_value(
+			b's' => read_value(
 				bytes,
 				offset,
 				|chunk| i16::from_le_bytes([chunk[0], chunk[1]]),
 				std::mem::size_of::<i16>(),
 				TagValueType::I16,
 			),
-			'S' => read_value(
+			b'S' => read_value(
 				bytes,
 				offset,
 				|chunk| u16::from_le_bytes([chunk[0], chunk[1]]),
 				std::mem::size_of::<u16>(),
 				TagValueType::U16,
 			),
-			'i' => read_value(
+			b'i' => read_value(
 				bytes,
 				offset,
 				|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
 				std::mem::size_of::<i32>(),
 				TagValueType::I32,
 			),
-			'I' => read_value(
+			b'I' => read_value(
 				bytes,
 				offset,
 				|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
 				std::mem::size_of::<u32>(),
 				TagValueType::U32,
 			),
-			'f' => read_value(
+			b'f' => read_value(
 				bytes,
 				offset,
 				|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
 				std::mem::size_of::<f32>(),
 				TagValueType::F32,
 			),
-			'Z' =>
+			b'Z' =>
 			{
 				match find_null_terminator_simd(&bytes[*offset..], offset)
 				{
@@ -142,10 +142,10 @@ pub(crate) fn read_tags(
 				//	}
 				//}
 			}
-			'B' =>
+			b'B' =>
 			{
 				// Byte array (Array of typed values)
-				let array_type = bytes[*offset] as char;
+				let array_type = bytes[*offset];
 				*offset += 1;
 				let array_len = u32::from_le_bytes([
 					bytes[*offset],
@@ -157,49 +157,49 @@ pub(crate) fn read_tags(
 
 				match array_type
 				{
-					'c' => read_byte_array(
+					b'c' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| i8::from_le_bytes([chunk[0]]),
 						TagValueType::I8,
 					),
-					'C' => read_byte_array(
+					b'C' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| u8::from_le_bytes([chunk[0]]),
 						TagValueType::U8,
 					),
-					's' => read_byte_array(
+					b's' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| i16::from_le_bytes([chunk[0], chunk[1]]),
 						TagValueType::I16,
 					),
-					'S' => read_byte_array(
+					b'S' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| u16::from_le_bytes([chunk[0], chunk[1]]),
 						TagValueType::U16,
 					),
-					'i' => read_byte_array(
+					b'i' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
 						TagValueType::I32,
 					),
-					'I' => read_byte_array(
+					b'I' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
 						|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
 						TagValueType::U32,
 					),
-					'f' => read_byte_array(
+					b'f' => read_byte_array(
 						bytes,
 						offset,
 						array_len,
@@ -218,8 +218,7 @@ pub(crate) fn read_tags(
 		};
 
 		debug!("tag = {:?}:{}:{:?}", &tag, val_type, &value);
-		// 10-15 seconds slower in some cases when adding to tags
-		// find more efficient way
+
 		tags.push(Tag {
 			name: tag,
 			val_type,

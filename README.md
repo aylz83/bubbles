@@ -48,11 +48,11 @@ async fn main()
 				println!("TID name: {:?}", rid);
 			}
 
-		// Only pileup reads if read names contain a string
-		if read.read_name.contains("some imaginary requirement")
-		{
-			return Some(read);
-		}
+			// Only pileup reads if read names contain a string
+			if read.read_name.contains("some imaginary requirement")
+			{
+				return Some(read);
+			}
   
 			None
 		}

@@ -360,6 +360,7 @@ dependencies = [
 [[package]]
 name = "pufferfish"
 version = "0.1.1"
+source = "git+https://github.com/aylz83/pufferfish-rs#f70aec7fb6ac92f9873baaa5ac70f032eb1d9846"
 dependencies = [
  "async-compression",
  "async-trait",

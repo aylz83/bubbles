@@ -20,74 +20,71 @@ use bubbles::*;
 #[tokio::main]
 async fn main()
 {
-  let mut read_count = 0;
+	let mut read_count = 0;
 
-  // Automatically searches for a sample.bam.bai, but this can optionall be supplied with set_bai if the path/name differs
+	// Automatically searches for a sample.bam.bai, but this can optionall be supplied with set_bai if the path/name differs
 	let pileup = bam::Builder::from_path("sample.bam")
 	.await
-  .expect("Unable to open BAM")
-  // Fetch all of chromosome 3
-  // Only available when a BAI is present, omitting add_fetch_regions reads the entire BAM
-  // NamedTid also supports transcript_ids if the BAM is aligned to the transcriptome
+	.expect("Unable to open BAM")
+	// Fetch all of chromosome 3
+	// Only available when a BAI is present, omitting add_fetch_regions reads the entire BAM
+	// NamedTid also supports transcript_ids if the BAM is aligned to the transcriptome
 	.add_fetch_region(bam::FetchRegion::NamedTid("chr3"))
-  .expect("Unable to add search region")
-  // Fetch a section of chromosome 2
+	.expect("Unable to add search region")
+	// Fetch a section of chromosome 2
 	.add_fetch_region(bam::FetchRegion::NamedTidRegion(
-	  "chr2", 119998389, 201064349,
+		"chr2", 119998389, 201064349,
 	)
-  .expect("Unable to add search region")
-  // what features to request, omitting this enables all BAM featurs
-  .set_bam_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
-  .fetch_reads(
+	.expect("Unable to add search region")
+	// what features to request, omitting this enables all BAM featurs
+	.set_bam_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
+	.fetch_reads(
 		|read, header|
-    {
+		{
 			read_count += 1;
 
 			if let Some(rid) = header.ref_name(read.ref_id)
 			{
-        println!("TID name: {:?}", rid);
+				println!("TID name: {:?}", rid);
 			}
 
-      // Only pileup reads if read names contain a string
-      if read.read_name.contains("some imaginary requirement")
-      {
-        return Some(read);
-      }
+		// Only pileup reads if read names contain a string
+		if read.read_name.contains("some imaginary requirement")
+		{
+			return Some(read);
+		}
   
 			None
-	  },
-    // Request CIGAR ops and read names.
-    // Setting this to None will enable all features to be requested
-	  Some(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES),
+		}
 	)
 	.await
 	.expect("unable to read sequences");
 
-  // Alternatively, a builder can be opened as follows:
-  // let bam_buffer = ... Some aysnc BufReader pointing to memory or a stream
-  // let bai_buffer = ... Some aysnc BufReader pointing to memory or a stream
-  // let builder = bam::Builder::from_reader(bam_buffer, Some(bai_buffer)).await.expect("unable to open");
-  // Or if you don't wish to suppoy BAI data
-  // let builder = bam::Builder::from_reader(bam_buffer, None).await.expect("unable to open");
-  // Do something with builder (set_features, add_fetch_region, fetch_reads etc)...
+	// Alternatively, a builder can be opened as follows:
+	// let bam_buffer = ... Some aysnc BufReader pointing to memory or a stream
+	// let bai_buffer = ... Some aysnc BufReader pointing to memory or a stream
+	// let builder = bam::Builder::from_reader(bam_buffer, Some(bai_buffer)).await.expect("unable to open");
+	// Or if you don't wish to suppoy BAI data
+	// let builder = bam::Builder::from_reader(bam_buffer, None).await.expect("unable to open");
+	// Do something with builder (set_features, add_fetch_region, fetch_reads etc)...
 
 	println!("read count = {}", read_count);
 
 
-  if let Some(pileup) = pileup
-  {
-  	println!("first 10 pileup positions:");
-  	let to_break = 10;
-  	for (index, pileup) in pileup.iter().enumerate()
-  	{
-  		if index == to_break
-  		{
-  			break;
-  		}
+	if let Some(pileup) = pileup
+	{
+		println!("first 10 pileup positions:");
+		let to_break = 10;
+		for (index, pileup) in pileup.iter().enumerate()
+		{
+			if index == to_break
+			{
+				break;
+			}
 
-  		println!("tid {}:pos {} = {}", pileup.tid, pileup.pos, pileup.score);
-  	}
-  }
+			println!("tid {}:pos {} = {}", pileup.tid, pileup.pos, pileup.score);
+		}
+	}
 
 	Ok(())
 }

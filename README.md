@@ -1,8 +1,6 @@
 # bubbles
 A terribly named, "fast" BAM parser and pileup rust crate making use of SIMD
 
-![bubbles logo](assets/bubbles.png)
-
 Originally, this crate started out life as a just a learning curve to better understand the BAM specification and learn SIMD.
 
 It has since evolved, supporting the following:
@@ -16,7 +14,7 @@ It has since evolved, supporting the following:
 
 # Example
 
-```{rust}
+```rust
 use bubbles::*;
 
 #[tokio::main]

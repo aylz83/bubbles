@@ -153,7 +153,7 @@ where
 							.header
 							.references
 							.iter()
-							.position(|name| name.name == seqname)
+							.position(|name| name.name_as_str() == seqname)
 							.unwrap();
 
 						let chunks = bai_reader.ref_indices[tid as usize].flatten_all_bins();
@@ -179,7 +179,7 @@ where
 							.header
 							.references
 							.iter()
-							.position(|name| name.name == seqname)
+							.position(|name| name.name_as_str() == seqname)
 							.unwrap();
 
 						let bins = bai::region_to_bins(start, end);
@@ -222,7 +222,7 @@ where
 
 		if self
 			.features
-			.map_or(false, |f| f.contains(crate::bam::BamFeatures::CIGAR))
+			.map_or(false, |f| f.contains(crate::bam::BamFeatures::PILEUP))
 		{
 			return Some(self.sort_pileup(reads)).transpose();
 		}
@@ -238,8 +238,6 @@ where
 	where
 		F: FnMut(crate::bam::Field, &mut crate::bam::Header) -> Option<crate::bam::Field>,
 	{
-		let mut coverage = BTreeSet::<u64>::new();
-
 		loop
 		{
 			let mut bytes = match self
@@ -262,7 +260,7 @@ where
 				self.features.as_ref(),
 				None,  // No tid filter
 				&None, // No position limits
-				&mut coverage,
+				&mut None,
 				&mut self.header,
 			)
 			.await?
@@ -286,13 +284,15 @@ where
 	{
 		for region in &self.regions
 		{
-			let mut coverage = BTreeSet::<u64>::new();
+			let mut coverage = Some(BTreeSet::<u64>::new());
 
 			for offset in &region.region
 			{
 				if let Some(limits) = &region.limits
 				{
-					if (limits.start..limits.end).all(|pos| coverage.contains(&pos))
+					let coverage_set = coverage.as_ref().expect("unable to unwrap coverage");
+
+					if (limits.start..limits.end).all(|pos| coverage_set.contains(&pos))
 					{
 						break;
 					}

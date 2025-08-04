@@ -7,10 +7,6 @@ async fn main() -> anyhow::Result<()>
 
 	let mut read_count = 0;
 
-	// tid name in field
-	// use tid in field and pileup
-	// add star juncrion reading
-	//
 	let data = std::fs::read("sample.bam")?;
 
 	let cursor = Cursor::new(data);
@@ -19,6 +15,7 @@ async fn main() -> anyhow::Result<()>
 		.expect("not bam format");
 
 	let pileup = bam
+		// add BamFeatures::PILEUP to return pileup data
 		.set_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
 		.fetch_reads(|read, _| {
 			read_count += 1;

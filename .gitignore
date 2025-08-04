@@ -10,4 +10,4 @@ target/
 *.pdb
 
 sample.bam
-
+sample.bam.bai

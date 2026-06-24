@@ -1,14 +1,37 @@
 use std::simd::Simd;
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone)]
+use std::fmt;
+
+use crate::bam::blocks::AlignedBlocks;
+use crate::splicing::SplicedSegments;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind
+{
+	Match = b'=' as u8,
+	Mismatch = b'X' as u8,
+	Legacy = b'M' as u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cigar
 {
-	Match(u32),
-	Deletion(u32),
-	Insertion(u32),
-	Softclip(u32),
+	Match(u32, MatchKind), // M, = or X
+	Insertion(u32),        // I
+	Deletion(u32),         // D
+	Softclip(u32),         // S
+	Hardclip(u32),         // H
+	Skip(u32),             // N
+	Pad(u32),              // P
 	Unknown,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CigarString
+{
+	ops: Vec<Cigar>,
 }
 
 impl Cigar
@@ -17,12 +40,255 @@ impl Cigar
 	{
 		match opcode
 		{
-			b'M' | b'=' | b'X' => Cigar::Match(length),
-			b'D' => Cigar::Deletion(length),
+			b'=' => Cigar::Match(length, MatchKind::Match),
+			b'X' => Cigar::Match(length, MatchKind::Mismatch),
+			b'M' => Cigar::Match(length, MatchKind::Legacy),
 			b'I' => Cigar::Insertion(length),
+			b'D' => Cigar::Deletion(length),
 			b'S' => Cigar::Softclip(length),
+			b'H' => Cigar::Hardclip(length),
+			b'N' => Cigar::Skip(length),
+			b'P' => Cigar::Pad(length),
 			_ => Cigar::Unknown,
 		}
+	}
+
+	pub fn len(&self) -> u32
+	{
+		match *self
+		{
+			Cigar::Match(l, _)
+			| Cigar::Skip(l)
+			| Cigar::Pad(l)
+			| Cigar::Deletion(l)
+			| Cigar::Insertion(l)
+			| Cigar::Hardclip(l)
+			| Cigar::Softclip(l) => l,
+			Cigar::Unknown => 0,
+		}
+	}
+}
+
+impl CigarString
+{
+	pub fn new(ops: Vec<Cigar>) -> Self
+	{
+		Self { ops }
+	}
+
+	pub fn read_len(&self) -> u32
+	{
+		self.ops
+			.iter()
+			.map(|op| match *op
+			{
+				Cigar::Match(l, _) | Cigar::Insertion(l) | Cigar::Softclip(l) => l,
+				_ => 0,
+			})
+			.sum()
+	}
+
+	pub fn ref_len(&self) -> u32
+	{
+		self.ops
+			.iter()
+			.map(|op| match *op
+			{
+				Cigar::Match(l, _) | Cigar::Deletion(l) | Cigar::Skip(l) => l,
+				_ => 0,
+			})
+			.sum()
+	}
+
+	pub fn total_len(&self) -> u32
+	{
+		self.ops.iter().map(Cigar::len).sum()
+	}
+
+	pub fn is_empty(&self) -> bool
+	{
+		self.ops.is_empty()
+	}
+
+	pub fn is_spliced(&self) -> bool
+	{
+		self.ops.iter().any(|op| matches!(op, Cigar::Skip(_)))
+	}
+
+	pub fn is_contiguous(&self) -> bool
+	{
+		!self.ops.iter().any(|op| matches!(op, Cigar::Skip(_)))
+	}
+
+	pub fn has_indels(&self) -> bool
+	{
+		self.ops
+			.iter()
+			.any(|op| matches!(op, Cigar::Insertion(_) | Cigar::Deletion(_)))
+	}
+
+	pub fn splice_count(&self) -> usize
+	{
+		self.ops
+			.iter()
+			.filter(|op| matches!(op, Cigar::Skip(_)))
+			.count()
+	}
+
+	pub fn splice_lengths(&self) -> impl Iterator<Item = u32> + '_
+	{
+		self.ops.iter().filter_map(|op| {
+			if let Cigar::Skip(l) = op
+			{
+				Some(*l)
+			}
+			else
+			{
+				None
+			}
+		})
+	}
+
+	pub fn infer_introns(&self) -> impl Iterator<Item = (u32, u32)> + '_
+	{
+		let mut refp = 0u32;
+
+		self.ops.iter().filter_map(move |op| match *op
+		{
+			Cigar::Match(l, _) =>
+			{
+				refp += l;
+				None
+			}
+
+			Cigar::Insertion(_) | Cigar::Softclip(_) => None,
+
+			Cigar::Deletion(l) =>
+			{
+				refp += l;
+				None
+			}
+
+			Cigar::Skip(l) =>
+			{
+				let j = (refp, refp + l);
+				refp += l;
+				Some(j)
+			}
+
+			_ => None,
+		})
+	}
+
+	pub fn ref_coverage(&self) -> impl Iterator<Item = (u32, u32)> + '_
+	{
+		self.aligned_blocks().map(|b| (b.ref_start, b.ref_end))
+	}
+
+	pub fn leading_softclip(&self) -> u32
+	{
+		match self.ops.first()
+		{
+			Some(Cigar::Softclip(l)) => *l,
+			_ => 0,
+		}
+	}
+
+	pub fn trailing_softclip(&self) -> u32
+	{
+		match self.ops.last()
+		{
+			Some(Cigar::Softclip(l)) => *l,
+			_ => 0,
+		}
+	}
+
+	pub fn spliced_segments(&self) -> SplicedSegments<'_>
+	{
+		SplicedSegments {
+			ops: &self.ops,
+			idx: 0,
+			read_pos: 0,
+			ref_pos: 0,
+		}
+	}
+
+	pub fn aligned_blocks(&self) -> AlignedBlocks<'_>
+	{
+		AlignedBlocks {
+			ops: &self.ops,
+			idx: 0,
+			read_pos: 0,
+			ref_pos: 0,
+		}
+	}
+
+	pub fn ops(&self) -> &[Cigar]
+	{
+		&self.ops
+	}
+
+	pub fn advance_ref(&self, start_ref: u32) -> u32
+	{
+		let delta: u32 = self
+			.ops
+			.iter()
+			.map(|op| match *op
+			{
+				Cigar::Match(l, _) | Cigar::Deletion(l) | Cigar::Skip(l) => l,
+				_ => 0,
+			})
+			.sum();
+
+		start_ref + delta
+	}
+
+	pub fn read_to_ref(&self, read_coord: u32) -> Option<u32>
+	{
+		for block in self.aligned_blocks()
+		{
+			if read_coord >= block.read_start && read_coord < block.read_end
+			{
+				return Some(block.ref_start + (read_coord - block.read_start));
+			}
+		}
+		None
+	}
+
+	pub fn ref_to_read(&self, ref_coord: u32) -> Option<u32>
+	{
+		for block in self.aligned_blocks()
+		{
+			if ref_coord >= block.ref_start && ref_coord < block.ref_end
+			{
+				return Some(block.read_start + (ref_coord - block.ref_start));
+			}
+		}
+		None
+	}
+}
+
+impl fmt::Display for CigarString
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+	{
+		for op in &self.ops
+		{
+			match *op
+			{
+				Cigar::Match(l, MatchKind::Legacy) => write!(f, "{}M", l)?,
+				Cigar::Match(l, MatchKind::Match) => write!(f, "{}=", l)?,
+				Cigar::Match(l, MatchKind::Mismatch) => write!(f, "{}X", l)?,
+				Cigar::Skip(l) => write!(f, "{}N", l)?,
+				Cigar::Pad(l) => write!(f, "{}P", l)?,
+				Cigar::Deletion(l) => write!(f, "{}D", l)?,
+				Cigar::Insertion(l) => write!(f, "{}I", l)?,
+				Cigar::Softclip(l) => write!(f, "{}S", l)?,
+				Cigar::Hardclip(l) => write!(f, "{}H", l)?,
+				Cigar::Unknown => write!(f, "*")?,
+			}
+		}
+		Ok(())
 	}
 }
 
@@ -34,6 +300,7 @@ const CIGAR_INDEX_LOOKUP: [bool; 256] = {
 	t[b'=' as usize] = true;
 	t[b'X' as usize] = true;
 	t[b'D' as usize] = true;
+	t[b'N' as usize] = true;
 	t
 };
 

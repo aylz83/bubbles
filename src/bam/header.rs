@@ -1,9 +1,9 @@
 use crate::error;
 
-use pufferfish::BGZ;
+use pufferfish::prelude::*;
 
 use tokio::io::BufReader as TokioBufReader;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, AsyncSeek};
 
 use log::debug;
 
@@ -44,9 +44,9 @@ impl Header
 
 pub(crate) async fn read_bam_header<R>(reader: &mut TokioBufReader<R>) -> error::Result<Header>
 where
-	R: AsyncRead + Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + Send + std::marker::Unpin,
 {
-	let bytes = match reader.read_bgzf_block(Some(pufferfish::is_bam_eof)).await?
+	let bytes = match reader.read_bgzf_block(Some(is_bam_eof)).await?
 	{
 		Some(bytes) => bytes,
 		None => return Err(error::Error::BamFormat),

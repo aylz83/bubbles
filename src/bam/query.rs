@@ -5,16 +5,18 @@ use std::io::{Seek, Cursor};
 use std::collections::BTreeSet;
 
 use tokio::fs::File as TokioFile;
-use tokio::io::{SeekFrom, AsyncSeekExt, BufReader as TokioBufReader};
+use tokio::io::{SeekFrom, AsyncRead, AsyncSeek, AsyncSeekExt, BufReader as TokioBufReader};
 
 use log::debug;
 
 use crate::error;
 use crate::bai;
 use crate::bam;
-use crate::AsyncReadSeek;
+// use crate::AsyncReadSeek;
 
-use pufferfish::BGZ;
+use crate::bam::CoverageProfile;
+
+use pufferfish::prelude::*;
 
 pub enum FetchRegion<'a>
 {
@@ -35,7 +37,7 @@ pub(crate) struct RegionWithLimits
 
 pub struct AsyncBamQuery<R>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 {
 	reader: TokioBufReader<R>,
 	regions: Vec<RegionWithLimits>,
@@ -84,7 +86,7 @@ impl AsyncBamQuery<TokioFile>
 
 impl<R> AsyncBamQuery<R>
 where
-	R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 {
 	pub async fn from_reader(reader: R, bai_reader: Option<R>) -> error::Result<Self>
 	{
@@ -199,10 +201,7 @@ where
 		Ok(self)
 	}
 
-	pub async fn query_reads<F>(
-		&mut self,
-		mut read_fn: F,
-	) -> error::Result<Option<Vec<bam::Pileup>>>
+	pub async fn query_reads<F>(&mut self, mut read_fn: F) -> error::Result<Option<CoverageProfile>>
 	// Return None when CIGAR ops are turned off since this is required for pileup generation
 	where
 		F: FnMut(bam::Field, &mut crate::bam::Header) -> Option<bam::Field>,
@@ -238,10 +237,7 @@ where
 	{
 		loop
 		{
-			let mut bytes = match self
-				.reader
-				.read_bgzf_block(Some(pufferfish::is_bam_eof))
-				.await
+			let mut bytes = match self.reader.read_bgzf_block(Some(is_bam_eof)).await
 			{
 				Ok(Some(bytes)) => bytes,
 				Ok(None) => break,
@@ -306,10 +302,7 @@ where
 
 				if block_start == block_end
 				{
-					let mut bytes = match self
-						.reader
-						.read_bgzf_block(Some(pufferfish::is_bam_eof))
-						.await
+					let mut bytes = match self.reader.read_bgzf_block(Some(is_bam_eof)).await
 					{
 						Ok(Some(bytes)) => bytes,
 						Ok(None) => break,
@@ -369,10 +362,7 @@ where
 							u64::MAX
 						};
 
-						let mut bytes = match self
-							.reader
-							.read_bgzf_block(Some(pufferfish::is_bam_eof))
-							.await
+						let mut bytes = match self.reader.read_bgzf_block(Some(is_bam_eof)).await
 						{
 							Ok(Some(bytes)) => bytes,
 							Ok(None) => break,
@@ -428,7 +418,7 @@ where
 		Ok(())
 	}
 
-	fn sort_pileup(&self, reads: Vec<bam::Field>) -> error::Result<Vec<bam::Pileup>>
+	fn sort_pileup(&self, reads: Vec<bam::Field>) -> error::Result<CoverageProfile>
 	{
 		let pileup = bam::generate_pileup(&reads);
 		let mut pileup: Vec<_> = pileup
@@ -437,6 +427,6 @@ where
 			.collect();
 		pileup.sort_by(|a, b| (a.tid, a.pos).cmp(&(b.tid, b.pos)));
 
-		Ok(pileup)
+		Ok(CoverageProfile(pileup))
 	}
 }

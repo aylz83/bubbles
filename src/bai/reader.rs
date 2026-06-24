@@ -1,17 +1,14 @@
-#![allow(dead_code)]
-
 use std::path::Path;
 use std::ops::Range;
 use std::collections::HashMap;
 
 use tokio::fs::File as TokioFile;
-use tokio::io::{AsyncReadExt, BufReader as TokioBufReader};
+use tokio::io::{AsyncRead, AsyncSeek, AsyncReadExt, BufReader as TokioBufReader};
 
 use log::debug;
 
 use crate::bai::{Header, Region, Reference};
 use crate::error;
-use crate::AsyncReadSeek;
 
 pub(crate) struct Reader
 {
@@ -22,7 +19,7 @@ impl Reader
 {
 	pub async fn from_reader<R>(reader: R) -> error::Result<Reader>
 	where
-		R: AsyncReadSeek + std::marker::Send + std::marker::Unpin,
+		R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
 	{
 		let mut reader = TokioBufReader::new(reader);
 

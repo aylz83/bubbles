@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod blocks;
 mod cigar;
 mod header;
 mod pileup;
@@ -11,6 +12,7 @@ pub use crate::bam::pileup::*;
 pub use crate::bam::cigar::*;
 pub use crate::bam::tags::*;
 pub use crate::bam::header::*;
+pub use crate::bam::blocks::*;
 
 use crate::error;
 
@@ -404,8 +406,7 @@ fn process_quality_scores(bytes: &[u8], l_seq: usize) -> Box<[u8]>
 {
 	let mut qual = Vec::with_capacity(l_seq);
 
-	// Process the quality scores in chunks
-	const CHUNK_SIZE: usize = 16; // This may vary based on your architecture
+	const CHUNK_SIZE: usize = 16;
 	let mut i = 0;
 
 	// Process the sequence in chunks of SIMD width

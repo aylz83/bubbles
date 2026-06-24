@@ -11,13 +11,13 @@ description = "A terribly named, memory efficient, fast BAM file parser"
 repository = "https://github.com/aylz83/bubbles"
 
 [dependencies]
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 byteorder = "1.5.0"
-futures = "0.3.31"
-log = "0.4.27"
-rustc-hash = "2.1.1"
-thiserror = "2.0.12"
-tokio = { version = "1.47.1", features = ["full"] }
+futures = "0.3.32"
+log = "0.4.33"
+rustc-hash = "2.1.2"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
 pufferfish = { git = "https://github.com/aylz83/pufferfish-rs", version = "0.2.0", features = ["bgzf-async"] }
-bitflags = "2.9.1"
-hashbrown = "0.15.4"
+bitflags = "2.13.0"
+hashbrown = "0.17.1"

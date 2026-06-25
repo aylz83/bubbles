@@ -5,6 +5,112 @@ use std::simd::cmp::SimdPartialEq;
 
 use crate::error;
 
+macro_rules! impl_tag_array_accessors {
+	(
+		$(
+			fn $vec_fn:ident -> $slice_fn:ident : $ty:ty = $variant:ident
+		),* $(,)?
+	) => {
+		impl Tag {
+
+			$(
+				// Vec<T> version
+				pub fn $vec_fn(&self) -> Option<Vec<$ty>> {
+					if self.val_type != b'B' {
+						return None;
+					}
+
+					let mut out = Vec::with_capacity(self.value.len());
+
+					for v in &self.value {
+						match v {
+							TagValueType::$variant(x) => out.push(*x),
+							_ => return None,
+						}
+					}
+
+					Some(out)
+				}
+
+				// Iterator version (zero alloc)
+				pub fn $slice_fn(&self) -> Option<impl Iterator<Item = $ty> + '_> {
+					if self.val_type != b'B' {
+						return None;
+					}
+
+					Some(self.value.iter().filter_map(|v| {
+						match v {
+							TagValueType::$variant(x) => Some(*x),
+							_ => None,
+						}
+					}))
+				}
+			)*
+		}
+	};
+}
+
+macro_rules! impl_tag_tryfrom_numeric {
+	($($ty:ty => $variant:ident),* $(,)?) => {
+		$(
+			impl TagTryFrom for $ty {
+				fn from_tag(tag: &Tag) -> Option<Self> {
+					match tag.value.first()? {
+						TagValueType::$variant(v) => Some(*v),
+						_ => None,
+					}
+				}
+			}
+
+			impl TagTryFrom for Vec<$ty> {
+				fn from_tag(tag: &Tag) -> Option<Self> {
+					if tag.val_type != b'B' {
+						return None;
+					}
+
+					let mut out = Vec::with_capacity(tag.value.len());
+
+					for v in &tag.value {
+						match v {
+							TagValueType::$variant(x) => out.push(*x),
+							_ => return None,
+						}
+					}
+
+					Some(out)
+				}
+			}
+		)*
+	};
+}
+
+pub trait TagTryFrom: Sized
+{
+	fn from_tag(tag: &Tag) -> Option<Self>;
+}
+
+impl TagTryFrom for String
+{
+	fn from_tag(tag: &Tag) -> Option<Self>
+	{
+		match tag.value.first()?
+		{
+			TagValueType::String(s) => String::from_utf8(s.to_vec()).ok(),
+			_ => None,
+		}
+	}
+}
+
+impl_tag_tryfrom_numeric! {
+	i8 => I8,
+	u8 => U8,
+	i16 => I16,
+	u16 => U16,
+	i32 => I32,
+	u32 => U32,
+	f32 => F32,
+}
+
 #[derive(Debug)]
 pub enum TagValueType
 {
@@ -28,10 +134,113 @@ pub struct Tag
 
 impl Tag
 {
+	pub fn type_byte(&self) -> u8
+	{
+		self.val_type
+	}
+
+	pub fn is_array(&self) -> bool
+	{
+		self.val_type == b'B'
+	}
+
+	pub fn is_string(&self) -> bool
+	{
+		self.val_type == b'Z'
+	}
+
+	pub fn is_scalar(&self) -> bool
+	{
+		matches!(
+			self.val_type,
+			b'A' | b'c' | b'C' | b's' | b'S' | b'i' | b'I' | b'f'
+		)
+	}
+
+	pub fn len(&self) -> usize
+	{
+		self.value.len()
+	}
+
+	pub fn is_empty(&self) -> bool
+	{
+		self.value.is_empty()
+	}
+
+	pub fn try_as<T>(&self) -> Option<T>
+	where
+		T: TagTryFrom,
+	{
+		T::from_tag(self)
+	}
+
 	pub fn name_as_str(&self) -> &str
 	{
 		unsafe { std::str::from_utf8_unchecked(&self.name[..self.name.len() - 1]) }
 	}
+
+	pub fn first(&self) -> Option<&TagValueType>
+	{
+		self.value.first()
+	}
+
+	pub fn as_i32(&self) -> Option<i32>
+	{
+		match self.first()?
+		{
+			TagValueType::I32(v) => Some(*v),
+			_ => None,
+		}
+	}
+
+	pub fn as_u32(&self) -> Option<u32>
+	{
+		match self.first()?
+		{
+			TagValueType::U32(v) => Some(*v),
+			_ => None,
+		}
+	}
+
+	pub fn as_f32(&self) -> Option<f32>
+	{
+		match self.first()?
+		{
+			TagValueType::F32(v) => Some(*v),
+			_ => None,
+		}
+	}
+
+	pub fn as_str_bytes(&self) -> Option<&[u8]>
+	{
+		match self.first()?
+		{
+			TagValueType::String(s) => Some(&s[..]),
+			_ => None,
+		}
+	}
+
+	pub fn as_str(&self) -> Option<&str>
+	{
+		self.as_str_bytes()
+			.and_then(|b| std::str::from_utf8(b).ok())
+	}
+
+	pub fn as_lossy_str(&self) -> Option<String>
+	{
+		self.as_str_bytes()
+			.map(|b| String::from_utf8_lossy(b).into_owned())
+	}
+}
+
+impl_tag_array_accessors! {
+	fn as_i8_array -> as_i8_slice : i8 = I8,
+	fn as_u8_array -> as_u8_slice : u8 = U8,
+	fn as_i16_array -> as_i16_slice : i16 = I16,
+	fn as_u16_array -> as_u16_slice : u16 = U16,
+	fn as_i32_array -> as_i32_slice : i32 = I32,
+	fn as_u32_array -> as_u32_slice : u32 = U32,
+	fn as_f32_array -> as_f32_slice : f32 = F32,
 }
 
 pub(crate) fn read_tags(

@@ -54,7 +54,7 @@ pub struct Field
 	pub read_name: Option<Box<[u8]>>,
 	pub sequence: Option<Box<[u8]>>,
 	pub sequence_quality: Option<Box<[u8]>>,
-	pub cigar: Option<Vec<Cigar>>,
+	pub cigar: Option<CigarString>,
 	pub tags: Option<Vec<Tag>>,
 }
 
@@ -252,15 +252,17 @@ where
 		let mut ref_index = pos;
 		let cigar = if features.map_or(false, |f| f.contains(BamFeatures::CIGAR))
 		{
-			Some(process_cigar(
-				&bytes,
-				&mut offset,
-				n_cigar_op as usize,
-				ref_id,
-				&mut ref_index,
-				//pileup_map,
-				coverage,
-			))
+			Some(CigarString {
+				ops: process_cigar(
+					&bytes,
+					&mut offset,
+					n_cigar_op as usize,
+					ref_id,
+					&mut ref_index,
+					//pileup_map,
+					coverage,
+				),
+			})
 		}
 		else
 		{
@@ -338,7 +340,7 @@ where
 			read_name: read_name,
 			sequence: seq,
 			sequence_quality: qual,
-			cigar: cigar,
+			cigar,
 			tags: tags_vec,
 		};
 

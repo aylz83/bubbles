@@ -31,7 +31,7 @@ pub enum Cigar
 #[derive(Debug, Clone, Default)]
 pub struct CigarString
 {
-	ops: Vec<Cigar>,
+	pub(crate) ops: Vec<Cigar>,
 }
 
 impl Cigar

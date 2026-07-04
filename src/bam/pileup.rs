@@ -61,7 +61,7 @@ pub(crate) fn generate_pileup(reads: &[Field]) -> FxRawMap<(i32, i32), u64>
 
 		if let Some(cigar_ops) = &read.cigar
 		{
-			for cigar in cigar_ops
+			for cigar in &cigar_ops.ops
 			{
 				match cigar
 				{

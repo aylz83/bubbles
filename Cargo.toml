@@ -21,3 +21,4 @@ tokio = { version = "1.52.3", features = ["full"] }
 pufferfish = { git = "https://github.com/aylz83/pufferfish-rs", version = "0.2.0", features = ["bgzf-async"] }
 bitflags = "2.13.0"
 hashbrown = "0.17.1"
+bstr = "1.13.1"

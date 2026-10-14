@@ -176,7 +176,7 @@ impl Tag
 
 	pub fn name_as_str(&self) -> &str
 	{
-		unsafe { std::str::from_utf8_unchecked(&self.name[..self.name.len() - 1]) }
+		unsafe { std::str::from_utf8_unchecked(&self.name[..self.name.len()]) }
 	}
 
 	pub fn first(&self) -> Option<&TagValueType>
@@ -253,7 +253,7 @@ pub(crate) fn read_tags(
 	while *offset <= block_size
 	{
 		// tag (char[2])
-		let tag = Box::from(&bytes[*offset..*offset + 2]);
+		let tag: Box<[u8]> = Box::from(&bytes[*offset..*offset + 2]);
 
 		*offset += 2;
 
@@ -426,7 +426,13 @@ pub(crate) fn read_tags(
 			}
 		};
 
-		debug!("tag = {:?}:{}:{:?}", &tag, val_type, &value);
+		tracing::debug!(
+			offset = *offset - 2,
+			tag_bytes = ?tag.as_ref(),
+			tag_name = %String::from_utf8_lossy(&tag),
+			"Read BAM tag name"
+		);
+		// debug!("tag = {:?}:{}:{:?}", &tag, val_type, &value);
 
 		tags.push(Tag {
 			name: tag,

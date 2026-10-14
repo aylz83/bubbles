@@ -136,6 +136,8 @@ impl Reader
 			ref_indices.push(Reference { bins: bins_map });
 		}
 
+		debug!("Finished reading BAI");
+
 		Ok(Reader { ref_indices })
 	}
 

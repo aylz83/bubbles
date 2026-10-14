@@ -18,6 +18,7 @@ use crate::bam::CoverageProfile;
 
 use pufferfish::prelude::*;
 
+#[derive(Debug)]
 pub enum FetchRegion
 {
 	Tid(u32),
@@ -68,6 +69,7 @@ impl<'a> From<std::borrow::Cow<'a, bstr::BStr>> for FetchRegion
 	}
 }
 
+#[derive(Debug)]
 pub(crate) struct RegionWithLimits
 {
 	region: Vec<Range<u64>>,
@@ -195,7 +197,7 @@ where
 							.references
 							.iter()
 							.position(|name| name.name_as_str() == seqname)
-							.unwrap();
+							.ok_or(error::Error::NoRef(seqname.to_string()))?;
 
 						let chunks = bai_reader.ref_indices[tid as usize].flatten_all_bins();
 						self.regions.push(RegionWithLimits {
@@ -221,7 +223,7 @@ where
 							.references
 							.iter()
 							.position(|name| name.name_as_str() == seqname)
-							.unwrap();
+							.ok_or(error::Error::NoRef(seqname.to_string()))?;
 
 						let bins = bai::region_to_bins(start, end);
 						let chunks = bai_reader.ref_indices[tid as usize].flatten_bins(&bins);
@@ -270,8 +272,9 @@ where
 						.header
 						.references
 						.iter()
-						.position(|name| name.name_as_str() == *seqname)
-						.ok_or(error::Error::BamFormat)? as u32;
+						.position(|name| name.name_as_str() == seqname)
+						.ok_or(error::Error::NoRef(seqname.to_string()))?
+						as u32;
 
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_all_bins();
 
@@ -297,8 +300,9 @@ where
 						.header
 						.references
 						.iter()
-						.position(|name| name.name_as_str() == *seqname)
-						.ok_or(error::Error::BamFormat)? as u32;
+						.position(|name| name.name_as_str() == seqname)
+						.ok_or(error::Error::NoRef(seqname.to_string()))?
+						as u32;
 
 					let bins = bai::region_to_bins(*start, *end);
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_bins(&bins);
@@ -321,6 +325,7 @@ where
 			});
 		}
 
+		debug!("regions = {:?}", regions);
 		let mut reads = Vec::new();
 
 		let reader = &mut self.reader;
@@ -375,7 +380,10 @@ where
 	{
 		loop
 		{
-			let mut bytes = match self.reader.read_bgzf_block(Some(is_bam_eof)).await
+			let mut bytes = match self
+				.reader
+				.read_and_decompress_bgzf_block(Some(is_bam_eof))
+				.await
 			{
 				Ok(Some(bytes)) => bytes,
 				Ok(None) => break,
@@ -478,7 +486,9 @@ where
 
 			if block_start == block_end
 			{
-				let mut bytes = match reader.read_bgzf_block(Some(is_bam_eof)).await
+				let mut bytes = match reader
+					.read_and_decompress_bgzf_block(Some(is_bam_eof))
+					.await
 				{
 					Ok(Some(bytes)) => bytes,
 					Ok(None) => break,
@@ -538,7 +548,9 @@ where
 						u64::MAX
 					};
 
-					let mut bytes = match reader.read_bgzf_block(Some(is_bam_eof)).await
+					let mut bytes = match reader
+						.read_and_decompress_bgzf_block(Some(is_bam_eof))
+						.await
 					{
 						Ok(Some(bytes)) => bytes,
 						Ok(None) => break,

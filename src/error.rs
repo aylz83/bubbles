@@ -7,6 +7,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Error, Debug)]
 pub enum Error
 {
+	#[error("Unable to find reference {0}")]
+	NoRef(String),
 	#[error("Not in BAM format")]
 	BamFormat,
 	#[error("Not in BAI format")]
@@ -25,4 +27,6 @@ pub enum Error
 	Pufferfish(#[from] PufferfishError),
 	#[error("IO error: {0}")]
 	Io(#[from] std::io::Error),
+	#[error("Convert error: {0}")]
+	Convert(#[from] std::array::TryFromSliceError),
 }

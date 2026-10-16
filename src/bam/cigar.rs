@@ -325,60 +325,61 @@ pub(crate) fn process_cigar(
 		// Calculate remaining operations
 		let remaining_ops = n_cigar_op - cigar_pos;
 
-		if remaining_ops >= simd_width && *offset + (simd_width * chunk_size) <= bytes.len()
+		// if remaining_ops >= simd_width && *offset + (simd_width * chunk_size) <= bytes.len()
+		// {
+		// 	tracing::debug!(bytes = ?bytes[*offset as usize..*offset as usize + simd_width]);
+		// 	// Process 4 CIGAR operations with SIMD
+		// 	let cigar_chunk = unsafe {
+		// 		core::slice::from_raw_parts(bytes.as_ptr().add(*offset) as *const u32, simd_width)
+		// 	};
+
+		// 	let cigar_chunk = Simd::<u32, 4>::from_array([
+		// 		cigar_chunk[0].to_le(),
+		// 		cigar_chunk[1].to_le(),
+		// 		cigar_chunk[2].to_le(),
+		// 		cigar_chunk[3].to_le(),
+		// 	]);
+
+		// 	// Extract operation codes and lengths in parallel
+		// 	let opcodes = cigar_chunk & Simd::splat(0xF); // Last 4 bits for opcode
+		// 	let lengths = cigar_chunk >> 4; // Remaining bits for length
+
+		// 	for i in 0..simd_width
+		// 	{
+		// 		let op = CIGAR_OPS[opcodes[i] as usize];
+		// 		let length = lengths[i];
+
+		// 		if op == b'M' || op == b'=' || op == b'X'
+		// 		{
+		// 			if let Some(coverage) = coverage_set
+		// 			{
+		// 				let mut cov_buf = [0u64; 1024];
+		// 				let mut cov_count = 0;
+
+		// 				for j in 0..length
+		// 				{
+		// 					cov_buf[cov_count] = (*ref_index + j as i32) as u64;
+		// 					cov_count += 1;
+		// 				}
+
+		// 				coverage.extend(&cov_buf[..cov_count]);
+		// 			}
+		// 		}
+
+		// 		if CIGAR_INDEX_LOOKUP[op as usize]
+		// 		{
+		// 			*ref_index += length as i32;
+		// 		}
+
+		// 		cigar[cigar_pos] = Cigar::from(op, length);
+		// 		cigar_pos = cigar_pos + 1;
+		// 	}
+
+		// 	*offset += simd_width * chunk_size; // Move to the next set of CIGAR operations
+		// }
+		// else
 		{
-			// Process 4 CIGAR operations with SIMD
-			let cigar_chunk = unsafe {
-				core::slice::from_raw_parts(bytes.as_ptr().add(*offset) as *const u32, simd_width)
-			};
-
-			let cigar_chunk = Simd::<u32, 4>::from_array([
-				cigar_chunk[0].to_le(),
-				cigar_chunk[1].to_le(),
-				cigar_chunk[2].to_le(),
-				cigar_chunk[3].to_le(),
-			]);
-
-			// Extract operation codes and lengths in parallel
-			let opcodes = cigar_chunk & Simd::splat(0xF); // Last 4 bits for opcode
-			let lengths = cigar_chunk >> 4; // Remaining bits for length
-
-			for i in 0..simd_width
-			{
-				let op = CIGAR_OPS[opcodes[i] as usize];
-				let length = lengths[i];
-
-				if op == b'M' || op == b'=' || op == b'X'
-				{
-					if let Some(coverage) = coverage_set
-					{
-						let mut cov_buf = [0u64; 1024];
-						let mut cov_count = 0;
-
-						for j in 0..length
-						{
-							cov_buf[cov_count] = (*ref_index + j as i32) as u64;
-							cov_count += 1;
-						}
-
-						coverage.extend(&cov_buf[..cov_count]);
-					}
-				}
-
-				if CIGAR_INDEX_LOOKUP[op as usize]
-				{
-					*ref_index += length as i32;
-				}
-
-				cigar[cigar_pos] = Cigar::from(op, length);
-				cigar_pos = cigar_pos + 1;
-			}
-
-			*offset += simd_width * chunk_size; // Move to the next set of CIGAR operations
-		}
-		else
-		{
-			// Fallback to scalar processing for remaining CIGAR operations
+			// tracing::debug!("scalar cigar"); // Fallback to scalar processing for remaining CIGAR operations
 			while cigar_pos < n_cigar_op && *offset + chunk_size <= bytes.len()
 			{
 				let cigar_enc = u32::from_le_bytes([

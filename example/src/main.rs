@@ -5,16 +5,20 @@ use std::sync::Arc;
 use bubbles::pufferfish::pool::BgzfBlockPool;
 use bubbles::prelude::*;
 
+use tracing_subscriber::EnvFilter;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()>
 {
-	env_logger::init();
+	tracing_subscriber::fmt()
+		.with_env_filter(EnvFilter::from_default_env())
+		.init();
 
 	let mut read_count = 0;
 
 	let data = std::fs::read("sample.bam")?;
 
-	let block_pool = Arc::new(BgzfBlockPool::new(10000, 64 * 1024));
+	let block_pool = Arc::new(BgzfBlockPool::new(1000, 64 * 1024));
 	let cursor = Cursor::new(data);
 	let mut bam = bubbles::bam::AsyncBamQuery::from_reader(cursor, None, block_pool)
 		.await

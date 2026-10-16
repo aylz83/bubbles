@@ -25,8 +25,8 @@ use futures::StreamExt;
 
 use crate::bam::CoverageProfile;
 
-const DEFAULT_BUFFER_SIZE: usize = 200;
-const DEFAULT_BLOCK_SIZE: usize = 200;
+const DEFAULT_BUFFER_SIZE: usize = 500;
+const DEFAULT_BLOCK_SIZE: usize = 500;
 
 use pufferfish::prelude::*;
 
@@ -457,8 +457,7 @@ where
 						.references
 						.iter()
 						.position(|name| name.name_as_str() == seqname)
-						.ok_or(error::Error::NoRef(seqname.to_string()))?
-						as u32;
+						.ok_or(error::Error::NoRef(seqname.to_string()))? as u32;
 
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_all_bins();
 
@@ -485,8 +484,7 @@ where
 						.references
 						.iter()
 						.position(|name| name.name_as_str() == seqname)
-						.ok_or(error::Error::NoRef(seqname.to_string()))?
-						as u32;
+						.ok_or(error::Error::NoRef(seqname.to_string()))? as u32;
 
 					let bins = bai::region_to_bins(*start, *end);
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_bins(&bins);
@@ -693,7 +691,7 @@ where
 			}
 			else
 			{
-				Vec::<BgzfCompressedBlock>::new()
+				batch
 			};
 
 			if batch.is_empty()
@@ -704,19 +702,21 @@ where
 			let decompressed: Vec<Vec<u8>> = self.thread_pool.install(|| {
 				batch
 					.into_par_iter()
-					.map(|block| match decompress_bgzf_block(&block)
-					{
-						Ok(bytes) =>
+					.map(
+						|block| match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
 						{
-							yield_now();
-							bytes
-						}
-						Err(e) =>
-						{
-							eprintln!("Decompression error: {:?}", e);
-							Vec::new()
-						}
-					})
+							Ok(bytes) =>
+							{
+								yield_now();
+								bytes
+							}
+							Err(e) =>
+							{
+								error!(error = %e, "Unable to decompress BGZF block");
+								Vec::new()
+							}
+						},
+					)
 					.collect()
 			});
 
@@ -741,16 +741,16 @@ where
 				}
 			}
 
-			if let Some(idx) = memchr::memrchr(b'\n', &blocks)
-			{
-				let remainder = blocks.split_off(idx + 1);
-				*self.pending_tail.get_or_insert(Vec::new()) = remainder;
-			}
-			else
-			{
-				*self.pending_tail.get_or_insert(Vec::new()) = blocks;
-				blocks = Vec::new();
-			}
+			// if let Some(idx) = memchr::memrchr(b'\n', &blocks)
+			// {
+			// 	let remainder = blocks.split_off(idx + 1);
+			// 	*self.pending_tail.get_or_insert(Vec::new()) = remainder;
+			// }
+			// else
+			// {
+			// *self.pending_tail.get_or_insert(Vec::new()) = blocks;
+			// blocks = Vec::new();
+			// }
 
 			match bam::read_bam_block(
 				&mut blocks,
@@ -924,17 +924,19 @@ where
 				let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
 					batch
 						.into_par_iter()
-						.map(|block| match decompress_bgzf_block(&block)
-						{
-							Ok(bytes) =>
+						.map(|block| {
+							match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
 							{
-								yield_now();
-								bytes
-							}
-							Err(e) =>
-							{
-								eprintln!("Decompression error: {:?}", e);
-								Vec::new()
+								Ok(bytes) =>
+								{
+									yield_now();
+									bytes
+								}
+								Err(e) =>
+								{
+									error!(error = %e, "Unable to decompress BGZF block");
+									Vec::new()
+								}
 							}
 						})
 						.collect()
@@ -966,7 +968,7 @@ where
 					.map_err(|_| error::Error::BamFormat)?;
 
 				match bam::read_bam_block(
-					&mut blocks,
+					&mut seek_bytes,
 					reads,
 					//&mut pileup,
 					&mut *read_fn,
@@ -1030,17 +1032,19 @@ where
 					let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
 						batch
 							.into_par_iter()
-							.map(|block| match decompress_bgzf_block(&block)
-							{
-								Ok(bytes) =>
+							.map(|block| {
+								match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
 								{
-									yield_now();
-									bytes
-								}
-								Err(e) =>
-								{
-									error!(error = %e, "Unable to decompress BAM block");
-									Vec::new()
+									Ok(bytes) =>
+									{
+										yield_now();
+										bytes
+									}
+									Err(e) =>
+									{
+										error!(error = %e, "Unable to decompress BGZF block");
+										Vec::new()
+									}
 								}
 							})
 							.collect()
@@ -1076,6 +1080,8 @@ where
 							.map_err(|_| error::Error::BamFormat)?;
 						std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
 							.map_err(|_| error::Error::BamFormat)?;
+
+						blocks = seek_bytes;
 					}
 
 					match bam::read_bam_block(

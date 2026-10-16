@@ -6,8 +6,9 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.104"
 bubbles = { path = "../" }
-env_logger = "0.11.11"
 tokio = "1.53.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [[bin]]
 name = "bubbles_example"

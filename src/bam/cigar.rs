@@ -1,4 +1,4 @@
-use std::simd::Simd;
+// use std::simd::Simd;
 use std::collections::BTreeSet;
 
 use std::fmt;
@@ -316,14 +316,14 @@ pub(crate) fn process_cigar(
 {
 	let mut cigar = vec![Cigar::Unknown; n_cigar_op as usize];
 	let chunk_size = 4; // Each CIGAR operation is 4 bytes
-	let simd_width = 4; // Using SIMD with 4 `u32` at a time
+					 // let simd_width = 4; // Using SIMD with 4 `u32` at a time
 
 	let mut cigar_pos = 0;
 
 	while cigar_pos < n_cigar_op
 	{
 		// Calculate remaining operations
-		let remaining_ops = n_cigar_op - cigar_pos;
+		// let remaining_ops = n_cigar_op - cigar_pos;
 
 		// if remaining_ops >= simd_width && *offset + (simd_width * chunk_size) <= bytes.len()
 		// {

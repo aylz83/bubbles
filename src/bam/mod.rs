@@ -16,7 +16,7 @@ pub use crate::bam::blocks::*;
 
 use crate::error;
 
-use log::debug;
+use tracing::debug;
 
 use std::simd::Simd;
 use std::ops::Range;

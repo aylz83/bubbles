@@ -1,4 +1,4 @@
-use log::debug;
+use tracing::debug;
 
 use std::simd::{Simd, Mask};
 use std::simd::cmp::SimdPartialEq;

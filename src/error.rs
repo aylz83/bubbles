@@ -29,4 +29,6 @@ pub enum Error
 	Io(#[from] std::io::Error),
 	#[error("Convert error: {0}")]
 	Convert(#[from] std::array::TryFromSliceError),
+	#[error("Thread error: {0}")]
+	Thread(#[from] rayon::ThreadPoolBuildError),
 }

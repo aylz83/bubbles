@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio::fs::File as TokioFile;
 use tokio::io::{AsyncRead, AsyncSeek, AsyncReadExt, BufReader as TokioBufReader};
 
-use log::debug;
+use tracing::debug;
 
 use crate::bai::{Header, Region, Reference};
 use crate::error;

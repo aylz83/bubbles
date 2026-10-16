@@ -2,7 +2,6 @@ use crate::error;
 
 use pufferfish::prelude::*;
 
-use tokio::io::BufReader as TokioBufReader;
 use tokio::io::{AsyncRead, AsyncSeek};
 
 // use log::debug;
@@ -42,9 +41,9 @@ impl Header
 	}
 }
 
-pub(crate) async fn read_bam_header<R>(reader: &mut TokioBufReader<R>) -> error::Result<Header>
+pub(crate) async fn read_bam_header<R>(reader: &mut R) -> error::Result<Header>
 where
-	R: AsyncRead + AsyncSeek + Send + Unpin,
+	R: AsyncRead + AsyncSeek + Send + Unpin + BGZ,
 {
 	let mut bytes = Vec::new();
 

@@ -5,16 +5,28 @@ use std::io::{Seek, Cursor};
 use std::collections::BTreeSet;
 
 use tokio::fs::File as TokioFile;
-use tokio::io::{SeekFrom, AsyncRead, AsyncSeek, AsyncSeekExt, BufReader as TokioBufReader};
+use tokio::io::{SeekFrom, AsyncRead, AsyncSeek, BufReader as TokioBufReader};
 
-use log::debug;
+use std::sync::Arc;
+
+use tracing::{error, debug};
 
 use crate::error;
 use crate::bai;
 use crate::bam;
 // use crate::AsyncReadSeek;
 
+use rayon::prelude::*;
+use rayon::yield_now;
+use rayon::{ThreadPoolBuilder, ThreadPool};
+
+use futures::stream::Buffered;
+use futures::StreamExt;
+
 use crate::bam::CoverageProfile;
+
+const DEFAULT_BUFFER_SIZE: usize = 200;
+const DEFAULT_BLOCK_SIZE: usize = 200;
 
 use pufferfish::prelude::*;
 
@@ -77,27 +89,71 @@ pub(crate) struct RegionWithLimits
 	tid: u32,
 }
 
+pub struct ReaderOptions
+{
+	pub buffer_size: Option<usize>,
+	pub n_threads: Option<usize>,
+	pub n_blocks: Option<usize>,
+}
+
+impl Default for ReaderOptions
+{
+	fn default() -> Self
+	{
+		Self {
+			buffer_size: Some(DEFAULT_BUFFER_SIZE),
+			n_threads: None,
+			n_blocks: Some(DEFAULT_BLOCK_SIZE),
+		}
+	}
+}
+
+impl ReaderOptions
+{
+	pub fn with_buffer_size(mut self, buffer_size: usize) -> Self
+	{
+		self.buffer_size = Some(buffer_size);
+		self
+	}
+
+	pub fn with_n_threads(mut self, n: usize) -> Self
+	{
+		self.n_threads = Some(n);
+		self
+	}
+
+	pub fn with_block_read_size(mut self, n: usize) -> Self
+	{
+		self.n_blocks = Some(n);
+		self
+	}
+}
+
 pub struct AsyncBamQuery<R>
 where
-	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin + 'static,
 {
-	reader: TokioBufReader<R>,
+	// reader: TokioBufReader<R>,
+	stream: Buffered<BgzfBlockStream<R>>,
 	regions: Vec<RegionWithLimits>,
 	header: crate::bam::Header,
 	bai_reader: Option<crate::bai::Reader>,
 	features: Option<crate::bam::BamFeatures>,
+	thread_pool: ThreadPool,
+	pending_tail: Option<Vec<u8>>,
+	block_size: usize,
 }
 
 impl AsyncBamQuery<TokioFile>
 {
-	pub async fn from_path<P>(path: P) -> error::Result<Self>
+	pub async fn from_path<P>(path: P, pool: Arc<pool::BgzfBlockPool>) -> error::Result<Self>
 	where
 		P: AsRef<Path>,
 	{
 		let path = path.as_ref().to_path_buf();
-		let file = TokioFile::open(&path).await?;
+		let mut file = TokioFile::open(&path).await?;
 
-		let mut reader = TokioBufReader::new(file);
+		// let mut reader = TokioBufReader::new(&mut file);
 
 		let mut bai_file = path.clone();
 		bai_file.add_extension("bai");
@@ -115,27 +171,96 @@ impl AsyncBamQuery<TokioFile>
 			None
 		};
 
-		let header = crate::bam::read_bam_header(&mut reader).await?;
+		let header = crate::bam::read_bam_header(&mut file).await?;
+
+		let stream = BgzfBlockStream::new(file, pool.clone(), Some(is_bam_eof))
+			.buffered(DEFAULT_BUFFER_SIZE);
+
+		let builder = ThreadPoolBuilder::new();
+		let thread_pool = builder.build()?;
 
 		Ok(AsyncBamQuery {
-			reader,
+			stream,
 			regions: Vec::new(),
 			header,
 			bai_reader,
 			features: None,
+			thread_pool,
+			pending_tail: None,
+			block_size: DEFAULT_BLOCK_SIZE,
+		})
+	}
+
+	pub async fn from_path_with_options<P>(
+		path: P,
+		pool: Arc<pool::BgzfBlockPool>,
+		options: ReaderOptions,
+	) -> error::Result<Self>
+	where
+		P: AsRef<Path>,
+	{
+		let path = path.as_ref().to_path_buf();
+		let mut file = TokioFile::open(&path).await?;
+
+		// let mut reader = TokioBufReader::new(&mut file);
+
+		let mut bai_file = path.clone();
+		bai_file.add_extension("bai");
+
+		//debug!("{:?}", bai_file.as_path().file_name().unwrap());
+
+		let bai_reader = if bai_file.exists()
+		{
+			debug!("Setting up for indexed reading");
+			Some(bai::Reader::from_path(&bai_file).await?)
+		}
+		else
+		{
+			debug!("BAI file doesn't exist, disabling BAM search");
+			None
+		};
+
+		let header = crate::bam::read_bam_header(&mut file).await?;
+
+		let stream = BgzfBlockStream::new(file, pool.clone(), Some(is_bam_eof))
+			.buffered(options.buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE));
+
+		let builder = ThreadPoolBuilder::new();
+		let builder = if let Some(n) = options.n_threads
+		{
+			builder.num_threads(n)
+		}
+		else
+		{
+			builder
+		};
+
+		let thread_pool = builder.build()?;
+
+		Ok(AsyncBamQuery {
+			stream,
+			regions: Vec::new(),
+			header,
+			bai_reader,
+			features: None,
+			thread_pool,
+			pending_tail: None,
+			block_size: options.n_blocks.unwrap_or(DEFAULT_BLOCK_SIZE),
 		})
 	}
 }
 
 impl<R> AsyncBamQuery<R>
 where
-	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin,
+	R: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin + 'static,
 {
-	pub async fn from_reader(reader: R, bai_reader: Option<R>) -> error::Result<Self>
+	pub async fn from_reader(
+		mut reader: R,
+		bai_reader: impl Into<Option<R>>,
+		pool: Arc<pool::BgzfBlockPool>,
+	) -> error::Result<Self>
 	{
-		let mut async_reader = TokioBufReader::new(reader);
-
-		let bai_reader = match bai_reader
+		let bai_reader = match bai_reader.into()
 		{
 			Some(reader) =>
 			{
@@ -149,14 +274,73 @@ where
 			}
 		};
 
-		let header = crate::bam::read_bam_header(&mut async_reader).await?;
+		let header = crate::bam::read_bam_header(&mut reader).await?;
+
+		let stream = BgzfBlockStream::new(reader, pool.clone(), Some(is_bam_eof))
+			.buffered(DEFAULT_BUFFER_SIZE);
+
+		let builder = ThreadPoolBuilder::new();
+		let thread_pool = builder.build()?;
 
 		Ok(AsyncBamQuery {
-			reader: async_reader,
+			stream,
 			regions: Vec::new(),
 			header,
 			bai_reader,
 			features: None,
+			thread_pool,
+			pending_tail: None,
+			block_size: DEFAULT_BLOCK_SIZE,
+		})
+	}
+
+	pub async fn from_reader_with_options(
+		mut reader: R,
+		bai_reader: impl Into<Option<R>>,
+		pool: Arc<pool::BgzfBlockPool>,
+		options: ReaderOptions,
+	) -> error::Result<Self>
+	{
+		let bai_reader = match bai_reader.into()
+		{
+			Some(reader) =>
+			{
+				debug!("Setting up for indexed reading");
+				Some(bai::Reader::from_reader(reader).await?)
+			}
+			None =>
+			{
+				debug!("BAI file doesn't exist, disabling BAM search");
+				None
+			}
+		};
+
+		let header = crate::bam::read_bam_header(&mut reader).await?;
+
+		let stream = BgzfBlockStream::new(reader, pool.clone(), Some(is_bam_eof))
+			.buffered(options.buffer_size.unwrap_or(DEFAULT_BUFFER_SIZE));
+
+		let builder = ThreadPoolBuilder::new();
+		let builder = if let Some(n) = options.n_threads
+		{
+			builder.num_threads(n)
+		}
+		else
+		{
+			builder
+		};
+
+		let thread_pool = builder.build()?;
+
+		Ok(AsyncBamQuery {
+			stream,
+			regions: Vec::new(),
+			header,
+			bai_reader,
+			features: None,
+			thread_pool,
+			pending_tail: None,
+			block_size: options.n_blocks.unwrap_or(DEFAULT_BLOCK_SIZE),
 		})
 	}
 
@@ -328,11 +512,22 @@ where
 		debug!("regions = {:?}", regions);
 		let mut reads = Vec::new();
 
-		let reader = &mut self.reader;
+		let stream = &mut self.stream;
 		let header = &mut self.header;
+		let thread_pool = &mut self.thread_pool;
 		let features = self.features.as_ref();
 
-		Self::_pileup_regions(reader, header, features, &mut read_fn, &mut reads, &regions).await?;
+		Self::_pileup_regions(
+			stream,
+			header,
+			thread_pool,
+			self.block_size,
+			features,
+			&mut read_fn,
+			&mut reads,
+			&regions,
+		)
+		.await?;
 
 		if self
 			.features
@@ -370,28 +565,195 @@ where
 		Ok(None)
 	}
 
+	// async fn decompress_blocks<S>(
+	// 	stream: &mut Buffered<BgzfBlockStream<S>>,
+	// 	header: &mut crate::bam::Header,
+	// 	pending_tail: &mut Option<BgzfCompressedBlock>,
+	// 	thread_pool: &ThreadPool,
+	// 	block_size: usize,
+	// ) -> Option<BgzfCompressedBlock>
+	// where
+	// 	S: AsyncRead + AsyncSeek + std::marker::Send + std::marker::Unpin + 'static,
+	// {
+	// 	let batch: pufferfish::error::Result<BgzfCompressedBlock> = stream
+	// 		.by_ref()
+	// 		.take(block_size)
+	// 		.collect::<pufferfish::error::Result<BgzfCompressedBlock>>()
+	// 		.await;
+
+	// 	let batch: Vec<Option<BgzfCompressedBlock>> = batch
+	// 		.into_iter()
+	// 		.filter_map(|res| match res
+	// 		{
+	// 			Ok(Some(block)) => Some(block), // keep the valid block
+	// 			_ => None,                      // skip empty blocks
+	// 		})
+	// 		.collect();
+
+	// 	let batch = if batch.is_empty()
+	// 	{
+	// 		match pending_tail.take()
+	// 		{
+	// 			Some(tail) if !tail.is_empty() => vec![tail],
+	// 			_ => Vec::<BgzfCompressedBlock>::new(),
+	// 		}
+	// 	}
+	// 	else
+	// 	{
+	// 		Vec::<BgzfCompressedBlock>::new()
+	// 	};
+
+	// 	if batch.is_empty()
+	// 	{
+	// 		return None;
+	// 	}
+
+	// 	let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
+	// 		batch
+	// 			.into_par_iter()
+	// 			.map(|block| match decompress_bgzf_block(&block)
+	// 			{
+	// 				Ok(bytes) =>
+	// 				{
+	// 					yield_now();
+	// 					bytes
+	// 				}
+	// 				Err(e) =>
+	// 				{
+	// 					error!(error = %e, "Unable to decompress BGZF block");
+	// 					Vec::new()
+	// 				}
+	// 			})
+	// 			.collect()
+	// 	});
+
+	// 	let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+
+	// 	let mut blocks = Vec::with_capacity(total_size);
+
+	// 	for bytes in decompressed
+	// 	{
+	// 		blocks.extend_from_slice(&bytes);
+	// 	}
+
+	// 	if let Some(tail) = pending_tail.as_mut()
+	// 	{
+	// 		if !tail.is_empty()
+	// 		{
+	// 			let mut merged = Vec::with_capacity(tail.len() + blocks.len());
+	// 			merged.extend_from_slice(tail);
+	// 			merged.extend_from_slice(&blocks);
+	// 			blocks = merged;
+	// 			tail.clear();
+	// 		}
+	// 	}
+
+	// 	if let Some(idx) = memchr::memrchr(b'\n', &blocks)
+	// 	{
+	// 		let remainder = blocks.split_off(idx + 1);
+	// 		*pending_tail.get_or_insert(Vec::new()) = remainder;
+	// 	}
+	// 	else
+	// 	{
+	// 		*pending_tail.get_or_insert(Vec::new()) = blocks;
+	// 		blocks = Vec::new();
+	// 	}
+
+	// 	Some(blocks)
+	// }
+
 	async fn pileup_all<F>(
 		&mut self,
 		mut read_fn: F,
-		reads: &mut Vec<crate::bam::Field>,
+		reads: &mut Vec<bam::Field>,
 	) -> error::Result<()>
 	where
-		F: FnMut(crate::bam::Field, &mut crate::bam::Header) -> Option<crate::bam::Field>,
+		F: FnMut(bam::Field, &mut bam::Header) -> Option<bam::Field>,
 	{
 		loop
 		{
-			let mut bytes = match self
-				.reader
-				.read_and_decompress_bgzf_block(Some(is_bam_eof))
-				.await
+			let batch: Vec<_> = self.stream.by_ref().take(self.block_size).collect().await;
+
+			let batch: Vec<_> = batch
+				.into_iter()
+				.filter_map(|res| match res
+				{
+					Ok(Some(block)) => Some(block), // keep the valid block
+					_ => None,                      // skip empty blocks
+				})
+				.collect();
+
+			let batch = if batch.is_empty()
 			{
-				Ok(Some(bytes)) => bytes,
-				Ok(None) => break,
-				Err(err) => return Err(err.into()),
+				match self.pending_tail.take()
+				{
+					Some(tail) if !tail.is_empty() => vec![tail],
+					_ => Vec::<BgzfCompressedBlock>::new(),
+				}
+			}
+			else
+			{
+				Vec::<BgzfCompressedBlock>::new()
 			};
 
+			if batch.is_empty()
+			{
+				break;
+			}
+
+			let decompressed: Vec<Vec<u8>> = self.thread_pool.install(|| {
+				batch
+					.into_par_iter()
+					.map(|block| match decompress_bgzf_block(&block)
+					{
+						Ok(bytes) =>
+						{
+							yield_now();
+							bytes
+						}
+						Err(e) =>
+						{
+							eprintln!("Decompression error: {:?}", e);
+							Vec::new()
+						}
+					})
+					.collect()
+			});
+
+			let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+
+			let mut blocks = Vec::with_capacity(total_size);
+
+			for bytes in decompressed
+			{
+				blocks.extend_from_slice(&bytes);
+			}
+
+			if let Some(tail) = self.pending_tail.as_mut()
+			{
+				if !tail.is_empty()
+				{
+					let mut merged = Vec::with_capacity(tail.len() + blocks.len());
+					merged.extend_from_slice(tail);
+					merged.extend_from_slice(&blocks);
+					blocks = merged;
+					tail.clear();
+				}
+			}
+
+			if let Some(idx) = memchr::memrchr(b'\n', &blocks)
+			{
+				let remainder = blocks.split_off(idx + 1);
+				*self.pending_tail.get_or_insert(Vec::new()) = remainder;
+			}
+			else
+			{
+				*self.pending_tail.get_or_insert(Vec::new()) = blocks;
+				blocks = Vec::new();
+			}
+
 			match bam::read_bam_block(
-				&mut bytes,
+				&mut blocks,
 				reads,
 				&mut read_fn,
 				self.features.as_ref(),
@@ -407,6 +769,35 @@ where
 				None => break, // EOF
 			}
 		}
+		// loop
+		// {
+		// 	let mut bytes = match self
+		// 		.reader
+		// 		.read_and_decompress_bgzf_block(Some(is_bam_eof))
+		// 		.await
+		// 	{
+		// 		Ok(Some(bytes)) => bytes,
+		// 		Ok(None) => break,
+		// 		Err(err) => return Err(err.into()),
+		// 	};
+
+		// 	match bam::read_bam_block(
+		// 		&mut bytes,
+		// 		reads,
+		// 		&mut read_fn,
+		// 		self.features.as_ref(),
+		// 		None,  // No tid filter
+		// 		&None, // No position limits
+		// 		&mut None,
+		// 		&mut self.header,
+		// 	)
+		// 	.await?
+		// 	{
+		// 		Some(_) =>
+		// 		{}
+		// 		None => break, // EOF
+		// 	}
+		// }
 
 		Ok(())
 	}
@@ -420,18 +811,31 @@ where
 		F: FnMut(bam::Field, &mut crate::bam::Header) -> Option<bam::Field>,
 	{
 		let regions = &self.regions;
-		let reader = &mut self.reader;
+		let stream = &mut self.stream;
 		let header = &mut self.header;
+		let thread_pool = &mut self.thread_pool;
 		let features = self.features.as_ref();
 
-		Self::_pileup_regions(reader, header, features, &mut read_fn, reads, regions).await?;
+		Self::_pileup_regions(
+			stream,
+			header,
+			thread_pool,
+			self.block_size,
+			features,
+			&mut read_fn,
+			reads,
+			regions,
+		)
+		.await?;
 
 		Ok(())
 	}
 
 	async fn _pileup_regions<F>(
-		reader: &mut TokioBufReader<R>,
+		stream: &mut Buffered<BgzfBlockStream<R>>,
 		header: &mut crate::bam::Header,
+		thread_pool: &ThreadPool,
+		block_size: usize,
 		features: Option<&crate::bam::BamFeatures>,
 		read_fn: &mut F,
 		reads: &mut Vec<bam::Field>,
@@ -442,15 +846,27 @@ where
 	{
 		for region in regions
 		{
-			Self::_pileup_region(reader, header, features, &mut *read_fn, reads, region).await?;
+			Self::_pileup_region(
+				stream,
+				header,
+				thread_pool,
+				block_size,
+				features,
+				&mut *read_fn,
+				reads,
+				region,
+			)
+			.await?;
 		}
 
 		Ok(())
 	}
 
 	async fn _pileup_region<F>(
-		reader: &mut TokioBufReader<R>,
+		stream: &mut Buffered<BgzfBlockStream<R>>,
 		header: &mut crate::bam::Header,
+		thread_pool: &ThreadPool,
+		block_size: usize,
 		features: Option<&crate::bam::BamFeatures>,
 		read_fn: &mut F,
 		reads: &mut Vec<bam::Field>,
@@ -476,34 +892,81 @@ where
 			let (block_start, virtual_start) = (offset.start >> 16, offset.start & 0xFFFF);
 			let (block_end, virtual_end) = (offset.end >> 16, offset.end & 0xFFFF);
 
-			debug!("virtual_start = {}", virtual_start);
-			debug!("virtual_end = {}", virtual_end);
+			debug!(
+				virtual_start = virtual_start,
+				virtual_end = virtual_end,
+				"Seeking to virtual offsets"
+			);
 
-			reader
-				.seek(SeekFrom::Start(block_start))
-				.await
-				.map_err(|_| error::Error::BamSeek(block_start))?;
+			stream
+				.get_mut()
+				.seek_to(SeekFrom::Start(block_start))
+				.await?;
 
 			if block_start == block_end
 			{
-				let mut bytes = match reader
-					.read_and_decompress_bgzf_block(Some(is_bam_eof))
-					.await
+				let batch: Vec<_> = stream.by_ref().take(block_size).collect().await;
+
+				let batch: Vec<_> = batch
+					.into_iter()
+					.filter_map(|res| match res
+					{
+						Ok(Some(block)) => Some(block), // keep the valid block
+						_ => None,                      // skip empty blocks
+					})
+					.collect();
+
+				if batch.is_empty()
 				{
-					Ok(Some(bytes)) => bytes,
-					Ok(None) => break,
-					Err(err) => return Err(err.into()),
-				};
+					break;
+				}
+
+				let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
+					batch
+						.into_par_iter()
+						.map(|block| match decompress_bgzf_block(&block)
+						{
+							Ok(bytes) =>
+							{
+								yield_now();
+								bytes
+							}
+							Err(e) =>
+							{
+								eprintln!("Decompression error: {:?}", e);
+								Vec::new()
+							}
+						})
+						.collect()
+				});
+
+				let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+
+				let mut blocks = Vec::with_capacity(total_size);
+
+				for bytes in decompressed
+				{
+					blocks.extend_from_slice(&bytes);
+				}
+
+				// let mut bytes = match reader
+				// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
+				// 	.await
+				// {
+				// 	Ok(Some(bytes)) => bytes,
+				// 	Ok(None) => break,
+				// 	Err(err) => return Err(err.into()),
+				// };
 
 				let mut seek_bytes = vec![0u8; (virtual_end - virtual_start) as usize];
-				let mut cursor = Cursor::new(&mut bytes);
+				let mut cursor = Cursor::new(&mut blocks);
 				Seek::seek(&mut cursor, SeekFrom::Start(virtual_start))
 					.map_err(|_| error::Error::BamFormat)?;
 				std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
 					.map_err(|_| error::Error::BamFormat)?;
 
 				match bam::read_bam_block(
-					&mut bytes,
+					&mut blocks,
 					reads,
 					//&mut pileup,
 					&mut *read_fn,
@@ -548,23 +1011,67 @@ where
 						u64::MAX
 					};
 
-					let mut bytes = match reader
-						.read_and_decompress_bgzf_block(Some(is_bam_eof))
-						.await
-					{
-						Ok(Some(bytes)) => bytes,
-						Ok(None) => break,
-						Err(err) => return Err(err.into()),
-					};
+					let batch: Vec<_> = stream.by_ref().take(block_size).collect().await;
 
-					let block_len = bytes.len() as u64;
+					let batch: Vec<_> = batch
+						.into_iter()
+						.filter_map(|res| match res
+						{
+							Ok(Some(block)) => Some(block), // keep the valid block
+							_ => None,                      // skip empty blocks
+						})
+						.collect();
+
+					if batch.is_empty()
+					{
+						break;
+					}
+
+					let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
+						batch
+							.into_par_iter()
+							.map(|block| match decompress_bgzf_block(&block)
+							{
+								Ok(bytes) =>
+								{
+									yield_now();
+									bytes
+								}
+								Err(e) =>
+								{
+									error!(error = %e, "Unable to decompress BAM block");
+									Vec::new()
+								}
+							})
+							.collect()
+					});
+
+					let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+
+					let mut blocks = Vec::with_capacity(total_size);
+
+					for bytes in decompressed
+					{
+						blocks.extend_from_slice(&bytes);
+					}
+
+					// let mut bytes = match reader
+					// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
+					// 	.await
+					// {
+					// 	Ok(Some(bytes)) => bytes,
+					// 	Ok(None) => break,
+					// 	Err(err) => return Err(err.into()),
+					// };
+
+					let block_len = blocks.len() as u64;
 					let start_offset = start_offset.min(block_len);
 					let end_offset = end_offset.min(block_len);
 
 					if start_offset < end_offset
 					{
 						let mut seek_bytes = vec![0u8; (end_offset - start_offset) as usize];
-						let mut cursor = Cursor::new(&mut bytes);
+						let mut cursor = Cursor::new(&mut blocks);
 						Seek::seek(&mut cursor, SeekFrom::Start(start_offset))
 							.map_err(|_| error::Error::BamFormat)?;
 						std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
@@ -572,7 +1079,7 @@ where
 					}
 
 					match bam::read_bam_block(
-						&mut bytes,
+						&mut blocks,
 						reads,
 						//&mut pileup,
 						&mut *read_fn,
@@ -593,10 +1100,11 @@ where
 						}
 					}
 
-					current_position = reader
-						.seek(SeekFrom::Current(0))
-						.await
-						.map_err(|_| error::Error::BamFormat)?;
+					current_position = stream.get_mut().seek_to(SeekFrom::Current(0)).await?;
+					// current_position = reader
+					// 	.seek(SeekFrom::Current(0))
+					// 	.await
+					// 	.map_err(|_| error::Error::BamFormat)?;
 				}
 			};
 		}

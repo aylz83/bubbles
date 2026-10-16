@@ -1,5 +1,10 @@
 use std::io::Cursor;
 
+use std::sync::Arc;
+
+use bubbles::pufferfish::pool::BgzfBlockPool;
+use bubbles::prelude::*;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()>
 {
@@ -9,14 +14,15 @@ async fn main() -> anyhow::Result<()>
 
 	let data = std::fs::read("sample.bam")?;
 
+	let block_pool = Arc::new(BgzfBlockPool::new(10000, 64 * 1024));
 	let cursor = Cursor::new(data);
-	let mut bam = bubbles::bam::AsyncBamQuery::from_reader(cursor, None)
+	let mut bam = bubbles::bam::AsyncBamQuery::from_reader(cursor, None, block_pool)
 		.await
 		.expect("not bam format");
 
 	let pileup = bam
 		// add BamFeatures::PILEUP to return pileup data
-		.set_features(bubbles::bam::BamFeatures::CIGAR | bubbles::bam::BamFeatures::READNAMES)
+		.set_features(BamFeatures::CIGAR | BamFeatures::READNAMES)
 		.query_reads(|read, _| {
 			read_count += 1;
 

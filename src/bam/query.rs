@@ -903,199 +903,199 @@ where
 				.seek_to(SeekFrom::Start(block_start))
 				.await?;
 
-			if block_start == block_end
+			// if block_start == block_end
+			// {
+			// 	let batch: Vec<_> = stream.by_ref().take(1).collect().await;
+
+			// 	let batch: Vec<_> = batch
+			// 		.into_iter()
+			// 		.filter_map(|res| match res
+			// 		{
+			// 			Ok(Some(block)) => Some(block), // keep the valid block
+			// 			_ => None,                      // skip empty blocks
+			// 		})
+			// 		.collect();
+
+			// 	if batch.is_empty()
+			// 	{
+			// 		break;
+			// 	}
+
+			// 	let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
+			// 		batch
+			// 			.into_par_iter()
+			// 			.map(|block| {
+			// 				match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
+			// 				{
+			// 					Ok(bytes) =>
+			// 					{
+			// 						yield_now();
+			// 						bytes
+			// 					}
+			// 					Err(e) =>
+			// 					{
+			// 						error!(error = %e, "Unable to decompress BGZF block");
+			// 						Vec::new()
+			// 					}
+			// 				}
+			// 			})
+			// 			.collect()
+			// 	});
+
+			// 	let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+
+			// 	let mut blocks = Vec::with_capacity(total_size);
+
+			// 	for bytes in decompressed
+			// 	{
+			// 		blocks.extend_from_slice(&bytes);
+			// 	}
+
+			// 	// let mut bytes = match reader
+			// 	// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
+			// 	// 	.await
+			// 	// {
+			// 	// 	Ok(Some(bytes)) => bytes,
+			// 	// 	Ok(None) => break,
+			// 	// 	Err(err) => return Err(err.into()),
+			// 	// };
+
+			// 	match bam::read_bam_block(
+			// 		&mut blocks[virtual_start as usize..virtual_end as usize],
+			// 		reads,
+			// 		//&mut pileup,
+			// 		&mut *read_fn,
+			// 		features,
+			// 		Some(region.tid),
+			// 		&region.limits,
+			// 		&mut coverage,
+			// 		&mut *header,
+			// 	)
+			// 	.await?
+			// 	{
+			// 		Some(_bam_block) =>
+			// 		{}
+			// 		None =>
+			// 		{
+			// 			debug!("BAM EOF!");
+			// 			break;
+			// 		}
+			// 	}
+			// }
+			// else
+			// {
+			// let mut current_position = block_start;
+
+			let block_count = (block_end - block_start + 1) as usize;
+
+			let batch: Vec<_> = stream.by_ref().take(block_count).collect().await;
+
+			let batch: Vec<_> = batch
+				.into_iter()
+				.filter_map(|res| match res
+				{
+					Ok(Some(block)) => Some(block), // keep the valid block
+					_ => None,                      // skip empty blocks
+				})
+				.collect();
+
+			if batch.is_empty()
 			{
-				let batch: Vec<_> = stream.by_ref().take(1).collect().await;
+				break;
+			}
 
-				let batch: Vec<_> = batch
-					.into_iter()
-					.filter_map(|res| match res
-					{
-						Ok(Some(block)) => Some(block), // keep the valid block
-						_ => None,                      // skip empty blocks
-					})
-					.collect();
-
-				if batch.is_empty()
-				{
-					break;
-				}
-
-				let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
-					batch
-						.into_par_iter()
-						.map(|block| {
-							match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
+			let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
+				batch
+					.into_par_iter()
+					.map(
+						|block| match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
+						{
+							Ok(bytes) =>
 							{
-								Ok(bytes) =>
-								{
-									yield_now();
-									bytes
-								}
-								Err(e) =>
-								{
-									error!(error = %e, "Unable to decompress BGZF block");
-									Vec::new()
-								}
+								yield_now();
+								bytes
 							}
-						})
-						.collect()
-				});
+							Err(e) =>
+							{
+								error!(error = %e, "Unable to decompress BGZF block");
+								Vec::new()
+							}
+						},
+					)
+					.collect()
+			});
 
-				let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
+			let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
 
-				let mut blocks = Vec::with_capacity(total_size);
+			let mut blocks = Vec::with_capacity(total_size);
 
-				for bytes in decompressed
-				{
-					blocks.extend_from_slice(&bytes);
-				}
+			for bytes in decompressed
+			{
+				blocks.extend_from_slice(&bytes);
+			}
 
-				// let mut bytes = match reader
-				// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
-				// 	.await
-				// {
-				// 	Ok(Some(bytes)) => bytes,
-				// 	Ok(None) => break,
-				// 	Err(err) => return Err(err.into()),
-				// };
+			// let mut bytes = match reader
+			// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
+			// 	.await
+			// {
+			// 	Ok(Some(bytes)) => bytes,
+			// 	Ok(None) => break,
+			// 	Err(err) => return Err(err.into()),
+			// };
 
-				match bam::read_bam_block(
-					&mut blocks[virtual_start as usize..virtual_end as usize],
-					reads,
-					//&mut pileup,
-					&mut *read_fn,
-					features,
-					Some(region.tid),
-					&region.limits,
-					&mut coverage,
-					&mut *header,
-				)
-				.await?
-				{
-					Some(_bam_block) =>
-					{}
-					None =>
-					{
-						debug!("BAM EOF!");
-						break;
-					}
-				}
+			let block_len = blocks.len() as u64;
+			let start_offset = virtual_start.min(block_len);
+			let end_offset = virtual_end.min(block_len);
+
+			blocks = if start_offset < end_offset
+			{
+				blocks[start_offset as usize..end_offset as usize].to_vec()
 			}
 			else
 			{
-				// let mut current_position = block_start;
+				Vec::new()
+			};
 
-				let block_count = (block_end - block_start + 1) as usize;
+			// if start_offset < end_offset
+			// {
+			// 	let mut seek_bytes = vec![0u8; (end_offset - start_offset) as usize];
+			// 	let mut cursor = Cursor::new(&mut blocks);
+			// 	Seek::seek(&mut cursor, SeekFrom::Start(start_offset))
+			// 		.map_err(|_| error::Error::BamFormat)?;
+			// 	std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
+			// 		.map_err(|_| error::Error::BamFormat)?;
 
-				let batch: Vec<_> = stream.by_ref().take(block_count).collect().await;
+			// 	blocks = seek_bytes;
+			// }
 
-				let batch: Vec<_> = batch
-					.into_iter()
-					.filter_map(|res| match res
-					{
-						Ok(Some(block)) => Some(block), // keep the valid block
-						_ => None,                      // skip empty blocks
-					})
-					.collect();
-
-				if batch.is_empty()
+			match bam::read_bam_block(
+				&mut blocks,
+				reads,
+				//&mut pileup,
+				&mut *read_fn,
+				features,
+				Some(region.tid),
+				&region.limits,
+				&mut coverage,
+				&mut *header,
+			)
+			.await?
+			{
+				Some(_bam_block) =>
+				{}
+				None =>
 				{
+					debug!("BAM EOF!");
 					break;
 				}
+			}
 
-				let decompressed: Vec<Vec<u8>> = thread_pool.install(|| {
-					batch
-						.into_par_iter()
-						.map(|block| {
-							match pufferfish::bgzf::stream::decompress_bgzf_block(&block)
-							{
-								Ok(bytes) =>
-								{
-									yield_now();
-									bytes
-								}
-								Err(e) =>
-								{
-									error!(error = %e, "Unable to decompress BGZF block");
-									Vec::new()
-								}
-							}
-						})
-						.collect()
-				});
-
-				let total_size: usize = decompressed.iter().map(|b| b.len()).sum();
-
-				let mut blocks = Vec::with_capacity(total_size);
-
-				for bytes in decompressed
-				{
-					blocks.extend_from_slice(&bytes);
-				}
-
-				// let mut bytes = match reader
-				// 	.read_and_decompress_bgzf_block(Some(is_bam_eof))
-				// 	.await
-				// {
-				// 	Ok(Some(bytes)) => bytes,
-				// 	Ok(None) => break,
-				// 	Err(err) => return Err(err.into()),
-				// };
-
-				let block_len = blocks.len() as u64;
-				let start_offset = virtual_start.min(block_len);
-				let end_offset = virtual_end.min(block_len);
-
-				blocks = if start_offset < end_offset
-				{
-					blocks[start_offset as usize..end_offset as usize].to_vec()
-				}
-				else
-				{
-					Vec::new()
-				};
-
-				// if start_offset < end_offset
-				// {
-				// 	let mut seek_bytes = vec![0u8; (end_offset - start_offset) as usize];
-				// 	let mut cursor = Cursor::new(&mut blocks);
-				// 	Seek::seek(&mut cursor, SeekFrom::Start(start_offset))
-				// 		.map_err(|_| error::Error::BamFormat)?;
-				// 	std::io::Read::read_exact(&mut cursor, &mut seek_bytes)
-				// 		.map_err(|_| error::Error::BamFormat)?;
-
-				// 	blocks = seek_bytes;
-				// }
-
-				match bam::read_bam_block(
-					&mut blocks,
-					reads,
-					//&mut pileup,
-					&mut *read_fn,
-					features,
-					Some(region.tid),
-					&region.limits,
-					&mut coverage,
-					&mut *header,
-				)
-				.await?
-				{
-					Some(_bam_block) =>
-					{}
-					None =>
-					{
-						debug!("BAM EOF!");
-						break;
-					}
-				}
-
-				// current_position = stream.get_mut().seek_to(SeekFrom::Current(0)).await?;
-				// current_position = reader
-				// 	.seek(SeekFrom::Current(0))
-				// 	.await
-				// 	.map_err(|_| error::Error::BamFormat)?;
-			};
+			// current_position = stream.get_mut().seek_to(SeekFrom::Current(0)).await?;
+			// current_position = reader
+			// 	.seek(SeekFrom::Current(0))
+			// 	.await
+			// 	.map_err(|_| error::Error::BamFormat)?;
+			// };
 		}
 
 		Ok(())

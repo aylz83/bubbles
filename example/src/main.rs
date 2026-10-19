@@ -1,6 +1,9 @@
-use std::io::Cursor;
-
 use std::sync::Arc;
+use std::env;
+
+use std::time::Instant;
+
+use bubbles::bam::FetchRegion;
 
 use bubbles::pufferfish::pool::BgzfBlockPool;
 use bubbles::prelude::*;
@@ -14,20 +17,26 @@ async fn main() -> anyhow::Result<()>
 		.with_env_filter(EnvFilter::from_default_env())
 		.init();
 
+	let args: Vec<String> = env::args().collect();
+
 	let mut read_count = 0;
 
-	let data = std::fs::read("sample.bam")?;
+	let bam_file = &args[1];
+
+	println!("Input file: {}", &bam_file);
 
 	let block_pool = Arc::new(BgzfBlockPool::new(1000, 64 * 1024));
-	let cursor = Cursor::new(data);
-	let mut bam = bubbles::bam::AsyncBamQuery::from_reader(cursor, None, block_pool)
+
+	let start = Instant::now();
+
+	let mut bam = bubbles::bam::AsyncBamQuery::from_path(bam_file, None, block_pool)
 		.await
 		.expect("not bam format");
 
 	let pileup = bam
 		// add BamFeatures::PILEUP to return pileup data
 		.set_features(BamFeatures::CIGAR | BamFeatures::READNAMES)
-		.query_reads(|read, _| {
+		.oneshot_query(&vec![FetchRegion::from("chr9")], |read, _| {
 			read_count += 1;
 
 			/*let len = read.sequence.len();
@@ -60,6 +69,9 @@ async fn main() -> anyhow::Result<()>
 			println!("tid {}:pos {} = {}", pileup.tid, pileup.pos, pileup.score);
 		}
 	}
+
+	let elapsed = start.elapsed();
+	println!("Reader creation + processing took {:?}", elapsed);
 
 	Ok(())
 }

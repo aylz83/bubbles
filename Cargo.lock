@@ -433,8 +433,8 @@ dependencies = [
 
 [[package]]
 name = "pufferfish"
-version = "0.2.1"
-source = "git+https://github.com/aylz83/pufferfish-rs#95c1c70fc364a32643a587a0b021a7c23486c56c"
+version = "0.2.2"
+source = "git+https://github.com/aylz83/pufferfish-rs#49bad76a06706ce626c3585fa1097af08b6699e3"
 dependencies = [
  "async-compression",
  "crossbeam",
@@ -443,6 +443,7 @@ dependencies = [
  "rayon",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

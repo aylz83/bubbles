@@ -111,7 +111,7 @@ impl_tag_tryfrom_numeric! {
 	f32 => F32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TagValueType
 {
 	Char(char),
@@ -125,6 +125,7 @@ pub enum TagValueType
 	String(Box<[u8]>),
 }
 
+#[derive(Debug, Clone)]
 pub struct Tag
 {
 	pub name: Box<[u8]>,

@@ -1,5 +1,4 @@
 // use std::simd::Simd;
-use std::collections::BTreeSet;
 
 use std::fmt;
 
@@ -311,7 +310,7 @@ pub(crate) fn process_cigar(
 	_ref_id: i32,
 	ref_index: &mut i32,
 	//pileup_map: &mut FxHashMap<(i32, i32), u64>,
-	coverage_set: &mut Option<BTreeSet<u64>>,
+	// coverage_set: &mut Option<BTreeSet<u64>>,
 ) -> Vec<Cigar>
 {
 	let mut cigar = vec![Cigar::Unknown; n_cigar_op as usize];
@@ -392,22 +391,22 @@ pub(crate) fn process_cigar(
 				let op = CIGAR_OPS[(cigar_enc & 0xF) as usize]; // Extract operation code
 				let length = cigar_enc >> 4; // Extract length
 
-				if op == b'M' || op == b'=' || op == b'X'
-				{
-					if let Some(coverage) = coverage_set
-					{
-						let mut cov_buf = [0u64; 1024];
-						let mut cov_count = 0;
+				// if op == b'M' || op == b'=' || op == b'X'
+				// {
+				// 	if let Some(coverage) = coverage_set
+				// 	{
+				// 		let mut cov_buf = [0u64; 1024];
+				// 		let mut cov_count = 0;
 
-						for j in 0..length
-						{
-							cov_buf[cov_count] = (*ref_index + j as i32) as u64;
-							cov_count += 1;
-						}
+				// 		for j in 0..length
+				// 		{
+				// 			cov_buf[cov_count] = (*ref_index + j as i32) as u64;
+				// 			cov_count += 1;
+				// 		}
 
-						coverage.extend(&cov_buf[..cov_count]);
-					}
-				}
+				// 		coverage.extend(&cov_buf[..cov_count]);
+				// 	}
+				// }
 
 				if CIGAR_INDEX_LOOKUP[op as usize]
 				{

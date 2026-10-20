@@ -10,12 +10,20 @@ use bubbles::prelude::*;
 
 use tracing_subscriber::EnvFilter;
 
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()>
 {
 	tracing_subscriber::fmt()
 		.with_env_filter(EnvFilter::from_default_env())
 		.init();
+
+	let span = tracing::info_span!("profiling_test");
+	let _entered = span.enter();
 
 	let args: Vec<String> = env::args().collect();
 
@@ -25,7 +33,7 @@ async fn main() -> anyhow::Result<()>
 
 	println!("Input file: {}", &bam_file);
 
-	let block_pool = Arc::new(BgzfBlockPool::new(1000, 64 * 1024));
+	let block_pool = Arc::new(BgzfBlockPool::new(10000, 64 * 1024));
 
 	let start = Instant::now();
 
@@ -35,7 +43,7 @@ async fn main() -> anyhow::Result<()>
 
 	let pileup = bam
 		// add BamFeatures::PILEUP to return pileup data
-		.set_features(BamFeatures::CIGAR | BamFeatures::READNAMES)
+		// .set_features(BamFeatures::CIGAR | BamFeatures::READNAMES)
 		.oneshot_query(&vec![FetchRegion::from("chr9")], |read, _| {
 			read_count += 1;
 
@@ -47,8 +55,8 @@ async fn main() -> anyhow::Result<()>
 			{
 				*ref_counts.entry(rid.name.clone()).or_insert(0) += 1;
 			}*/
-
-			Some(read)
+			None
+			// Some(read)
 		})
 		.await
 		.expect("unable to read sequences");

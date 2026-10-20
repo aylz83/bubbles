@@ -19,8 +19,6 @@ use crate::error;
 use tracing::debug;
 
 use std::simd::Simd;
-use std::ops::Range;
-use std::collections::BTreeSet;
 
 const ALPHABET: [u8; 16] = [
 	b'=', b'A', b'C', b'M', b'G', b'R', b'S', b'V', b'T', b'W', b'Y', b'H', b'K', b'D', b'B', b'N',
@@ -84,18 +82,22 @@ impl Field
 
 pub(crate) async fn read_bam_block<F>(
 	bytes: &mut [u8],
-	reads: &mut Vec<Field>,
+	mut reads: Option<&mut Vec<Field>>,
 	mut read_fn: F,
 	features: Option<&BamFeatures>,
-	tid: Option<u32>,
-	region: &Option<Range<u64>>,
-	coverage: &mut Option<BTreeSet<u64>>,
+	regions: Option<&[RegionWithLimits]>,
+	// coverage: &mut Option<BTreeSet<u64>>,
 	header: &mut Header,
 ) -> error::Result<Option<()>>
 // Result due to some functions have the possibility to fail, and Option so we can detect None = EOF
 where
 	F: FnMut(Field, &mut Header) -> Option<Field>,
 {
+	let read_names = features.is_some_and(|f| f.contains(BamFeatures::READNAMES));
+	let cigar_enabled = features.is_some_and(|f| f.contains(BamFeatures::CIGAR));
+	let sequences_enabled = features.is_some_and(|f| f.contains(BamFeatures::SEQUENCES));
+	let tags_enabled = features.is_some_and(|f| f.contains(BamFeatures::TAGS));
+
 	let mut offset: usize = 0;
 	let mut start_block_offset: usize;
 	while offset < bytes.len()
@@ -135,26 +137,23 @@ where
 
 		debug!("pos = {}", pos);
 
-		if let (Some(tid), Some(region)) = (tid, region)
+		let matches_region = match regions
 		{
-			if !(tid == ref_id as u32 && pos as u64 >= region.start && pos as u64 <= region.end)
-			{
-				debug!(
-					"breaking, tid = {}, ref_tid = {}, region.start = {}, region.end = {}, pos = \
-					 {}, block_size = {}",
-					tid, ref_id, region.start, region.end, pos, block_size
-				);
-				offset += (block_size - 3 - 4 - 4) as usize;
-				continue;
-			}
-		}
-		else if let Some(tid) = tid
+			None => true, // No filter: accept every record.
+			Some(regions) => regions.iter().any(|region| {
+				ref_id >= 0
+					&& region.tid == ref_id as u32
+					&& pos >= 0 && region
+					.limits
+					.as_ref()
+					.is_none_or(|limits| (pos as u64) >= limits.start && (pos as u64) <= limits.end)
+			}),
+		};
+
+		if !matches_region
 		{
-			if !(tid == ref_id as u32)
-			{
-				offset += (block_size - 3 - 4 - 4) as usize;
-				continue;
-			}
+			offset = start_block_offset + 4 + block_size as usize;
+			continue;
 		}
 
 		offset += 4;
@@ -234,7 +233,7 @@ where
 		offset += 4;
 
 		// read_name - char[l_read_name]
-		let read_name = if features.map_or(false, |f| f.contains(BamFeatures::READNAMES))
+		let read_name = if read_names
 		{
 			let r_name = &bytes[offset + 1..offset + 1 + l_read_name as usize];
 			Some(Box::from(r_name))
@@ -250,7 +249,7 @@ where
 
 		// cigar - uint32_t[n_cigar_op]
 		let mut ref_index = pos;
-		let cigar = if features.map_or(false, |f| f.contains(BamFeatures::CIGAR))
+		let cigar = if cigar_enabled
 		{
 			Some(CigarString {
 				ops: process_cigar(
@@ -260,7 +259,7 @@ where
 					ref_id,
 					&mut ref_index,
 					//pileup_map,
-					coverage,
+					// coverage,
 				),
 			})
 		}
@@ -273,7 +272,7 @@ where
 		debug!("cigar = {:?}", cigar);
 
 		// seq - uint8_t[(l_seq + 1) / 2]
-		let seq = if features.map_or(false, |f| f.contains(BamFeatures::SEQUENCES))
+		let seq = if sequences_enabled
 		{
 			Some(process_sequence(
 				&bytes[offset..(offset + l_seq as usize)],
@@ -290,7 +289,7 @@ where
 		offset += (l_seq as usize + 1) / 2;
 
 		// qual - char[l_seq]
-		let qual = if features.map_or(false, |f| f.contains(BamFeatures::SEQUENCES))
+		let qual = if sequences_enabled
 		{
 			Some(process_quality_scores(
 				&bytes[offset..offset + l_seq as usize],
@@ -306,7 +305,7 @@ where
 
 		offset += l_seq as usize;
 
-		let tags_vec = if features.map_or(false, |f| f.contains(BamFeatures::TAGS))
+		let tags_vec = if tags_enabled
 		{
 			let tag_bytes = start_block_offset + block_size as usize - offset;
 			let estimated_num_tags = tag_bytes / 8;
@@ -346,7 +345,10 @@ where
 
 		if let Some(keep_read) = read_fn(read, header)
 		{
-			reads.push(keep_read);
+			if let Some(reads) = reads.as_deref_mut()
+			{
+				reads.push(keep_read);
+			}
 		}
 	}
 

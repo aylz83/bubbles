@@ -6,11 +6,20 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.104"
 bubbles = { path = "../" }
+mimalloc = "0.1.52"
 tokio = "1.53.3"
-tracing = "0.1.44"
+tracing = { version = "0.1.44", features = ["release_max_level_info"] }
+tracing-flame = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [[bin]]
 name = "bubbles_example"
 path = "src/main.rs"
 
+[profile.release]
+opt-level = 3        # "z" = size, "s" = size for some optimizations, "3" = max speed
+lto = true             # Link-Time Optimization for cross-crate inlining
+codegen-units = 1      # Better optimization, slightly slower build
+panic = 'abort'        # Remove unwinding overhead
+incremental = false    # Avoid debug-like incremental overhead
+debug = true

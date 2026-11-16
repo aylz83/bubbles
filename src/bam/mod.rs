@@ -6,7 +6,9 @@ mod header;
 mod pileup;
 mod query;
 mod tags;
+mod writer;
 
+pub use crate::bam::writer::*;
 pub use crate::bam::query::*;
 pub use crate::bam::pileup::*;
 pub use crate::bam::cigar::*;
@@ -24,6 +26,7 @@ const ALPHABET: [u8; 16] = [
 	b'=', b'A', b'C', b'M', b'G', b'R', b'S', b'V', b'T', b'W', b'Y', b'H', b'K', b'D', b'B', b'N',
 ];
 
+use pufferfish::bgzf::writer::EncodeBgzfPayload;
 use bitflags::bitflags;
 
 bitflags! {
@@ -34,6 +37,7 @@ bitflags! {
 		const CIGAR = 0b0100;
 		const TAGS = 0b1000;
 		const PILEUP = 0b10000 | Self::CIGAR.bits();
+		const ALL = Self::READNAMES.bits() | Self::SEQUENCES.bits() | Self::CIGAR.bits() | Self::TAGS.bits();
 		const EMPTY = 0b0000;
 	}
 }
@@ -78,6 +82,173 @@ impl Field
 			std::str::from_utf8_unchecked(&name[..name.len().saturating_sub(1)])
 		})
 	}
+}
+
+impl EncodeBgzfPayload for Field
+{
+	type Error = error::Error;
+
+	fn encode_into(self, bytes: &mut Vec<u8>) -> error::Result<()>
+	{
+		let record_start = bytes.len();
+
+		// Reserve block_size; patch it after encoding the record.
+		bytes.extend_from_slice(&0u32.to_le_bytes());
+
+		let read_name = self.read_name.unwrap_or_else(|| Box::from(&b"\0"[..]));
+
+		// BAM read names include their NUL terminator.
+		let read_name_len = if read_name.last() == Some(&0)
+		{
+			read_name.len()
+		}
+		else
+		{
+			read_name.len() + 1
+		};
+
+		let read_name_len = u8::try_from(read_name_len).map_err(|_| error::Error::BamFormat)?;
+
+		let sequence = self.sequence.unwrap_or_else(|| Box::from(&[][..]));
+		let sequence_len = sequence.len();
+
+		let sequence_len_i32 = i32::try_from(sequence_len).map_err(|_| error::Error::BamFormat)?;
+
+		let quality = self.sequence_quality;
+
+		if let Some(ref quality) = quality
+		{
+			if !quality.is_empty() && quality.len() != sequence_len
+			{
+				return Err(error::Error::BamFormat);
+			}
+		}
+
+		let cigar = self.cigar;
+		let cigar_count = cigar.as_ref().map_or(0, |c| c.ops().len());
+
+		let cigar_count = u16::try_from(cigar_count).map_err(|_| error::Error::BamFormat)?;
+
+		// refID
+		bytes.extend_from_slice(&self.ref_id.to_le_bytes());
+
+		// pos
+		bytes.extend_from_slice(&self.pos.to_le_bytes());
+
+		// bin_mq_nl
+		let bin_mq_nl =
+			((self.bin as u32) << 16) | ((self.mapq as u32) << 8) | (read_name_len as u32);
+
+		bytes.extend_from_slice(&bin_mq_nl.to_le_bytes());
+
+		// flag_nc
+		let flag_nc = ((self.flags as u32) << 16) | (cigar_count as u32);
+
+		bytes.extend_from_slice(&flag_nc.to_le_bytes());
+
+		// l_seq
+		bytes.extend_from_slice(&sequence_len_i32.to_le_bytes());
+
+		// next_refID
+		bytes.extend_from_slice(&self.next_ref_id.to_le_bytes());
+
+		// next_pos
+		bytes.extend_from_slice(&self.next_pos.to_le_bytes());
+
+		// tlen
+		bytes.extend_from_slice(&self.tlen.to_le_bytes());
+
+		// Read name.
+		bytes.extend_from_slice(&read_name);
+
+		if read_name.last() != Some(&0)
+		{
+			bytes.push(0);
+		}
+
+		// CIGAR.
+		if let Some(cigar) = cigar
+		{
+			cigar.encode_into(bytes)?;
+		}
+
+		// Packed sequence.
+		for chunk in sequence.chunks(2)
+		{
+			let high = encode_base(chunk[0])?;
+
+			let low = match chunk.get(1)
+			{
+				Some(base) => encode_base(*base)?,
+				None => 0,
+			};
+
+			bytes.push((high << 4) | low);
+		}
+
+		// Quality scores.
+		match quality
+		{
+			Some(quality) if !quality.is_empty() =>
+			{
+				for value in quality.iter()
+				{
+					bytes.push(value.saturating_sub(33));
+				}
+			}
+
+			_ =>
+			{
+				// Missing quality is represented by 0xFF per base.
+				bytes.resize(bytes.len() + sequence_len, 0xFF);
+			}
+		}
+
+		// Tags.
+		if let Some(tags) = self.tags
+		{
+			for tag in tags
+			{
+				tag.encode_into(bytes)?;
+			}
+		}
+
+		let block_size = bytes.len() - record_start - 4;
+
+		let block_size = u32::try_from(block_size).map_err(|_| error::Error::BamFormat)?;
+
+		bytes[record_start..record_start + 4].copy_from_slice(&block_size.to_le_bytes());
+
+		Ok(())
+	}
+}
+
+fn encode_base(base: u8) -> error::Result<u8>
+{
+	// BAM 4-bit alphabet:
+	// = A C M G R S V T W Y H K D B N
+	let code = match base.to_ascii_uppercase()
+	{
+		b'=' => 0,
+		b'A' => 1,
+		b'C' => 2,
+		b'M' => 3,
+		b'G' => 4,
+		b'R' => 5,
+		b'S' => 6,
+		b'V' => 7,
+		b'T' => 8,
+		b'W' => 9,
+		b'Y' => 10,
+		b'H' => 11,
+		b'K' => 12,
+		b'D' => 13,
+		b'B' => 14,
+		b'N' => 15,
+		_ => return Err(error::Error::BamFormat),
+	};
+
+	Ok(code)
 }
 
 pub(crate) async fn read_bam_block<F>(
@@ -143,10 +314,10 @@ where
 			Some(regions) => regions.iter().any(|region| {
 				ref_id >= 0
 					&& region.tid == ref_id as u32
-					&& pos >= 0 && region
-					.limits
-					.as_ref()
-					.is_none_or(|limits| (pos as u64) >= limits.start && (pos as u64) <= limits.end)
+					&& pos >= 0
+					&& region.limits.as_ref().is_none_or(|limits| {
+						(pos as u64) >= limits.start && (pos as u64) <= limits.end
+					})
 			}),
 		};
 

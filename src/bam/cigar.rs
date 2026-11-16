@@ -5,6 +5,9 @@ use std::fmt;
 use crate::bam::blocks::AlignedBlocks;
 use crate::splicing::SplicedSegments;
 
+use pufferfish::bgzf::writer::EncodeBgzfPayload;
+use crate::error;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchKind
@@ -64,6 +67,23 @@ impl Cigar
 			| Cigar::Hardclip(l)
 			| Cigar::Softclip(l) => l,
 			Cigar::Unknown => 0,
+		}
+	}
+
+	pub fn opcode(&self) -> Option<(u32, u32)>
+	{
+		match self
+		{
+			Cigar::Match(length, MatchKind::Legacy) => Some((*length, 0)),
+			Cigar::Insertion(length) => Some((*length, 1)),
+			Cigar::Deletion(length) => Some((*length, 2)),
+			Cigar::Skip(length) => Some((*length, 3)),
+			Cigar::Softclip(length) => Some((*length, 4)),
+			Cigar::Hardclip(length) => Some((*length, 5)),
+			Cigar::Pad(length) => Some((*length, 6)),
+			Cigar::Match(length, MatchKind::Match) => Some((*length, 7)),
+			Cigar::Match(length, MatchKind::Mismatch) => Some((*length, 8)),
+			Cigar::Unknown => None,
 		}
 	}
 }
@@ -291,6 +311,30 @@ impl fmt::Display for CigarString
 	}
 }
 
+impl EncodeBgzfPayload for CigarString
+{
+	type Error = error::Error;
+
+	fn encode_into(self, bytes: &mut Vec<u8>) -> error::Result<()>
+	{
+		for op in self.ops()
+		{
+			let (length, opcode) = op.opcode().ok_or(error::Error::BamFormat)?;
+
+			if length > (u32::MAX >> 4)
+			{
+				return Err(error::Error::BamFormat);
+			}
+
+			let word = (length << 4) | opcode;
+
+			bytes.extend_from_slice(&word.to_le_bytes());
+		}
+
+		Ok(())
+	}
+}
+
 const CIGAR_OPS: [u8; 9] = [b'M', b'I', b'D', b'N', b'S', b'H', b'P', b'=', b'X'];
 
 const CIGAR_INDEX_LOOKUP: [bool; 256] = {
@@ -315,7 +359,7 @@ pub(crate) fn process_cigar(
 {
 	let mut cigar = vec![Cigar::Unknown; n_cigar_op as usize];
 	let chunk_size = 4; // Each CIGAR operation is 4 bytes
-					 // let simd_width = 4; // Using SIMD with 4 `u32` at a time
+						// let simd_width = 4; // Using SIMD with 4 `u32` at a time
 
 	let mut cigar_pos = 0;
 

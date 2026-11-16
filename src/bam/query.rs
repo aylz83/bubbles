@@ -135,7 +135,7 @@ where
 {
 	stream: BgzfBlockStream<R>,
 	regions: Vec<RegionWithLimits>,
-	header: crate::bam::Header,
+	pub header: crate::bam::Header,
 	bai_reader: Option<crate::bai::Reader>,
 	features: Option<crate::bam::BamFeatures>,
 	thread_pool: ThreadPool,
@@ -402,7 +402,8 @@ where
 						.references
 						.iter()
 						.position(|name| name.name_as_str() == seqname)
-						.ok_or(error::Error::NoRef(seqname.to_string()))? as u32;
+						.ok_or(error::Error::NoRef(seqname.to_string()))?
+						as u32;
 
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_all_bins();
 
@@ -429,7 +430,8 @@ where
 						.references
 						.iter()
 						.position(|name| name.name_as_str() == seqname)
-						.ok_or(error::Error::NoRef(seqname.to_string()))? as u32;
+						.ok_or(error::Error::NoRef(seqname.to_string()))?
+						as u32;
 
 					let bins = bai::region_to_bins(*start, *end);
 					let chunks = bai_reader.ref_indices[tid as usize].flatten_bins(&bins);

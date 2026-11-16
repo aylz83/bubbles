@@ -8,6 +8,8 @@ use bubbles::bam::FetchRegion;
 use bubbles::pufferfish::pool::BgzfBlockPool;
 use bubbles::prelude::*;
 
+use rayon::ThreadPoolBuilder;
+
 use tracing_subscriber::EnvFilter;
 
 use mimalloc::MiMalloc;
@@ -30,6 +32,7 @@ async fn main() -> anyhow::Result<()>
 	let mut read_count = 0;
 
 	let bam_file = &args[1];
+	let output_path = "output.bam";
 
 	println!("Input file: {}", &bam_file);
 
@@ -37,13 +40,20 @@ async fn main() -> anyhow::Result<()>
 
 	let start = Instant::now();
 
-	let mut bam = bubbles::bam::AsyncBamQuery::from_path(bam_file, None, block_pool)
+	let mut bam = bubbles::bam::AsyncBamQuery::from_path(bam_file, None, block_pool.clone())
 		.await
 		.expect("not bam format");
 
+	let mut records = Vec::new();
+
 	let pileup = bam
 		// add BamFeatures::PILEUP to return pileup data
-		// .set_features(BamFeatures::CIGAR | BamFeatures::READNAMES)
+		.set_features(
+			BamFeatures::CIGAR
+				| BamFeatures::READNAMES
+				| BamFeatures::SEQUENCES
+				| BamFeatures::TAGS,
+		)
 		.oneshot_query(&vec![FetchRegion::from("chr9")], |read, _| {
 			read_count += 1;
 
@@ -55,6 +65,7 @@ async fn main() -> anyhow::Result<()>
 			{
 				*ref_counts.entry(rid.name.clone()).or_insert(0) += 1;
 			}*/
+			records.push(read);
 			None
 			// Some(read)
 		})
@@ -78,7 +89,18 @@ async fn main() -> anyhow::Result<()>
 		}
 	}
 
+	let pool = Arc::new(ThreadPoolBuilder::new().num_threads(2).build()?);
+
+	let file = tokio::fs::File::create(output_path).await?;
+
+	let writer =
+		bubbles::bam::AsyncBamWriter::new_with_header(file, bam.header, pool, block_pool).await?;
+
+	writer.write(records).await?;
+	writer.finish().await?;
+
 	let elapsed = start.elapsed();
+	println!("Wrote {}", output_path);
 	println!("Reader creation + processing took {:?}", elapsed);
 
 	Ok(())

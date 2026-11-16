@@ -1,6 +1,7 @@
 use crate::error;
 
 use pufferfish::prelude::*;
+use pufferfish::bgzf::writer::EncodeBgzfPayload;
 
 use tokio::io::{AsyncRead, AsyncSeek};
 
@@ -38,6 +39,49 @@ impl Header
 	pub fn header_as_str(&self) -> &str
 	{
 		unsafe { std::str::from_utf8_unchecked(&self.header[..self.header.len() - 1]) }
+	}
+}
+
+impl EncodeBgzfPayload for Header
+{
+	type Error = error::Error;
+
+	fn encode_into(self, bytes: &mut Vec<u8>) -> error::Result<()>
+	{
+		// BAM magic.
+		bytes.extend_from_slice(b"BAM\x01");
+
+		// Header text.
+		let text_len = u32::try_from(self.header.len()).map_err(|_| error::Error::BamFormat)?;
+
+		bytes.extend_from_slice(&text_len.to_le_bytes());
+		bytes.extend_from_slice(&self.header);
+
+		// Reference dictionary.
+		let reference_count =
+			u32::try_from(self.references.len()).map_err(|_| error::Error::BamFormat)?;
+
+		bytes.extend_from_slice(&reference_count.to_le_bytes());
+
+		for reference in self.references
+		{
+			// BAM reference names are NUL terminated.
+			let name_len = reference.name.len() + usize::from(!reference.name.ends_with(&[0]));
+
+			let name_len = u32::try_from(name_len).map_err(|_| error::Error::BamFormat)?;
+
+			bytes.extend_from_slice(&name_len.to_le_bytes());
+			bytes.extend_from_slice(&reference.name);
+
+			if !reference.name.ends_with(&[0])
+			{
+				bytes.push(0);
+			}
+
+			bytes.extend_from_slice(&reference.length.to_le_bytes());
+		}
+
+		Ok(())
 	}
 }
 

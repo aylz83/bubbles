@@ -3,6 +3,7 @@ use tracing::debug;
 use std::simd::{Simd, Mask};
 use std::simd::cmp::SimdPartialEq;
 
+use pufferfish::bgzf::writer::EncodeBgzfPayload;
 use crate::error;
 
 macro_rules! impl_tag_array_accessors {
@@ -242,6 +243,154 @@ impl_tag_array_accessors! {
 	fn as_i32_array -> as_i32_slice : i32 = I32,
 	fn as_u32_array -> as_u32_slice : u32 = U32,
 	fn as_f32_array -> as_f32_slice : f32 = F32,
+}
+
+impl EncodeBgzfPayload for Tag
+{
+	type Error = error::Error;
+
+	fn encode_into(self, bytes: &mut Vec<u8>) -> error::Result<()>
+	{
+		if self.name.len() != 2
+		{
+			return Err(error::Error::BamFormat);
+		}
+
+		bytes.extend_from_slice(&self.name);
+		bytes.push(self.val_type);
+
+		match self.val_type
+		{
+			b'A' => match self.value.as_slice()
+			{
+				[TagValueType::Char(value)] if value.is_ascii() =>
+				{
+					bytes.push(*value as u8);
+				}
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'c' => match self.value.as_slice()
+			{
+				[TagValueType::I8(value)] => bytes.push(*value as u8),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'C' => match self.value.as_slice()
+			{
+				[TagValueType::U8(value)] => bytes.push(*value),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b's' => match self.value.as_slice()
+			{
+				[TagValueType::I16(value)] => bytes.extend_from_slice(&value.to_le_bytes()),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'S' => match self.value.as_slice()
+			{
+				[TagValueType::U16(value)] => bytes.extend_from_slice(&value.to_le_bytes()),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'i' => match self.value.as_slice()
+			{
+				[TagValueType::I32(value)] => bytes.extend_from_slice(&value.to_le_bytes()),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'I' => match self.value.as_slice()
+			{
+				[TagValueType::U32(value)] => bytes.extend_from_slice(&value.to_le_bytes()),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'f' => match self.value.as_slice()
+			{
+				[TagValueType::F32(value)] => bytes.extend_from_slice(&value.to_le_bytes()),
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'Z' | b'H' => match self.value.as_slice()
+			{
+				[TagValueType::String(value)] =>
+				{
+					if value.contains(&0)
+					{
+						return Err(error::Error::BamFormat);
+					}
+
+					bytes.extend_from_slice(value);
+					bytes.push(0);
+				}
+				_ => return Err(error::Error::BamFormat),
+			},
+
+			b'B' =>
+			{
+				let first = self.value.first().ok_or(error::Error::BamFormat)?;
+
+				let subtype = match first
+				{
+					TagValueType::I8(_) => b'c',
+					TagValueType::U8(_) => b'C',
+					TagValueType::I16(_) => b's',
+					TagValueType::U16(_) => b'S',
+					TagValueType::I32(_) => b'i',
+					TagValueType::U32(_) => b'I',
+					TagValueType::F32(_) => b'f',
+					_ => return Err(error::Error::BamFormat),
+				};
+
+				let count = u32::try_from(self.value.len()).map_err(|_| error::Error::BamFormat)?;
+
+				bytes.push(subtype);
+				bytes.extend_from_slice(&count.to_le_bytes());
+
+				for value in self.value
+				{
+					match value
+					{
+						TagValueType::I8(v) if subtype == b'c' => bytes.push(v as u8),
+
+						TagValueType::U8(v) if subtype == b'C' => bytes.push(v),
+
+						TagValueType::I16(v) if subtype == b's' =>
+						{
+							bytes.extend_from_slice(&v.to_le_bytes())
+						}
+
+						TagValueType::U16(v) if subtype == b'S' =>
+						{
+							bytes.extend_from_slice(&v.to_le_bytes())
+						}
+
+						TagValueType::I32(v) if subtype == b'i' =>
+						{
+							bytes.extend_from_slice(&v.to_le_bytes())
+						}
+
+						TagValueType::U32(v) if subtype == b'I' =>
+						{
+							bytes.extend_from_slice(&v.to_le_bytes())
+						}
+
+						TagValueType::F32(v) if subtype == b'f' =>
+						{
+							bytes.extend_from_slice(&v.to_le_bytes())
+						}
+
+						_ => return Err(error::Error::BamFormat),
+					}
+				}
+			}
+
+			_ => return Err(error::Error::BamFormat),
+		}
+
+		Ok(())
+	}
 }
 
 pub(crate) fn read_tags(

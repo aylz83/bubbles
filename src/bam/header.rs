@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncSeek};
 
 // use log::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TID
 {
 	pub name: Box<[u8]>,
@@ -22,7 +22,7 @@ impl TID
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Header
 {
 	pub header: Box<[u8]>,
@@ -34,6 +34,14 @@ impl Header
 	pub fn ref_name(&self, ref_id: i32) -> Option<&TID>
 	{
 		self.references.get(ref_id as usize)
+	}
+
+	pub fn ref_id(&self, ref_name: &str) -> Option<i32>
+	{
+		self.references
+			.iter()
+			.position(|name| name.name_as_str() == ref_name)
+			.map(|id| id as i32)
 	}
 
 	pub fn header_as_str(&self) -> &str

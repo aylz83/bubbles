@@ -42,6 +42,7 @@ bitflags! {
 	}
 }
 
+#[derive(Clone, Debug)]
 pub struct Field
 {
 	pub ref_id: i32,
@@ -81,6 +82,16 @@ impl Field
 		self.sequence_quality.as_ref().map(|name| unsafe {
 			std::str::from_utf8_unchecked(&name[..name.len().saturating_sub(1)])
 		})
+	}
+
+	pub fn set_ref_id(&mut self, ref_id: i32)
+	{
+		self.ref_id = ref_id
+	}
+
+	pub fn set_cigar(&mut self, cigar: impl Into<Option<CigarString>>)
+	{
+		self.cigar = cigar.into();
 	}
 }
 

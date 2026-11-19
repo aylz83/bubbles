@@ -1,6 +1,7 @@
 // use std::simd::Simd;
 
 use std::fmt;
+use std::convert::TryFrom;
 
 use crate::bam::blocks::AlignedBlocks;
 use crate::splicing::SplicedSegments;
@@ -335,6 +336,79 @@ impl EncodeBgzfPayload for CigarString
 	}
 }
 
+impl TryFrom<&str> for CigarString
+{
+	type Error = error::Error;
+
+	fn try_from(value: &str) -> error::Result<Self>
+	{
+		let mut ops = Vec::new();
+		let mut length = 0u32;
+		let mut has_length = false;
+
+		for byte in value.bytes()
+		{
+			if byte.is_ascii_digit()
+			{
+				has_length = true;
+
+				length = length
+					.checked_mul(10)
+					.and_then(|n| n.checked_add((byte - b'0') as u32))
+					.ok_or(error::Error::InvalidCigarLength)?;
+			}
+			else
+			{
+				if !has_length
+				{
+					return Err(error::Error::MissingCigarLength);
+				}
+
+				let op = match byte
+				{
+					b'=' | b'X' | b'M' | b'I' | b'D' | b'S' | b'H' | b'N' | b'P' =>
+					{
+						Cigar::from(byte, length)
+					}
+
+					_ => return Err(error::Error::InvalidCigarOpcode(byte)),
+				};
+
+				ops.push(op);
+				length = 0;
+				has_length = false;
+			}
+		}
+
+		if has_length
+		{
+			return Err(error::Error::MissingCigarOpcode);
+		}
+
+		Ok(CigarString { ops })
+	}
+}
+
+impl TryFrom<&String> for CigarString
+{
+	type Error = error::Error;
+
+	fn try_from(value: &String) -> error::Result<Self>
+	{
+		Self::try_from(value.as_str())
+	}
+}
+
+impl TryFrom<String> for CigarString
+{
+	type Error = error::Error;
+
+	fn try_from(value: String) -> error::Result<Self>
+	{
+		Self::try_from(value.as_str())
+	}
+}
+
 const CIGAR_OPS: [u8; 9] = [b'M', b'I', b'D', b'N', b'S', b'H', b'P', b'=', b'X'];
 
 const CIGAR_INDEX_LOOKUP: [bool; 256] = {
@@ -359,7 +433,7 @@ pub(crate) fn process_cigar(
 {
 	let mut cigar = vec![Cigar::Unknown; n_cigar_op as usize];
 	let chunk_size = 4; // Each CIGAR operation is 4 bytes
-						// let simd_width = 4; // Using SIMD with 4 `u32` at a time
+	// let simd_width = 4; // Using SIMD with 4 `u32` at a time
 
 	let mut cigar_pos = 0;
 

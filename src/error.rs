@@ -7,6 +7,14 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Error, Debug)]
 pub enum Error
 {
+	#[error("Missing CIGAR length")]
+	MissingCigarLength,
+	#[error("Missing CIGAR opcode")]
+	MissingCigarOpcode,
+	#[error("Missing CIGAR opcode {0}")]
+	InvalidCigarOpcode(u8),
+	#[error("Invalid CIGAR length")]
+	InvalidCigarLength,
 	#[error("Unable to find reference {0}")]
 	NoRef(String),
 	#[error("Not in BAM format")]

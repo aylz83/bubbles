@@ -84,9 +84,14 @@ impl Field
 		})
 	}
 
+	pub fn set_position(&mut self, pos: i32)
+	{
+		self.pos = pos;
+	}
+
 	pub fn set_ref_id(&mut self, ref_id: i32)
 	{
-		self.ref_id = ref_id
+		self.ref_id = ref_id;
 	}
 
 	pub fn set_cigar(&mut self, cigar: impl Into<Option<CigarString>>)

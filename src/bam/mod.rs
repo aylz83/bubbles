@@ -98,6 +98,78 @@ impl Field
 	{
 		self.cigar = cigar.into();
 	}
+
+	pub fn push_tag(&mut self, tag: Tag)
+	{
+		let tags = self.tags.get_or_insert_with(Vec::new);
+
+		if let Some(existing) = tags.iter_mut().find(|t| t.name == tag.name)
+		{
+			*existing = tag;
+		}
+		else
+		{
+			tags.push(tag);
+		}
+	}
+
+	pub fn tags(&self) -> impl Iterator<Item = &Tag>
+	{
+		self.tags.iter().flatten()
+	}
+
+	/// Retrieve a tag by its two-character name.
+	pub fn tag(&self, name: &[u8; 2]) -> Option<&Tag>
+	{
+		self.tags
+			.as_ref()?
+			.iter()
+			.find(|tag| tag.name.as_ref() == name)
+	}
+
+	/// Get a mutable tag by name.
+	pub fn tag_as_mut(&mut self, name: &[u8; 2]) -> Option<&mut Tag>
+	{
+		self.tags
+			.as_mut()?
+			.iter_mut()
+			.find(|tag| tag.has_name(name))
+	}
+
+	pub fn tag_as<T: TagTryFrom>(&self, name: &[u8; 2]) -> Option<T>
+	{
+		self.tag(name)?.try_as()
+	}
+
+	pub fn tag_as_str(&self, name: &[u8; 2]) -> Option<&str>
+	{
+		self.tag(name)?.as_str()
+	}
+
+	pub fn tag_as_i32(&self, name: &[u8; 2]) -> Option<i32>
+	{
+		self.tag(name)?.as_i32()
+	}
+
+	/// Check whether a tag exists.
+	pub fn has_tag(&self, name: &[u8; 2]) -> bool
+	{
+		self.tag(name).is_some()
+	}
+
+	/// Remove a tag by its two-character name.
+	pub fn remove_tag(&mut self, name: &[u8; 2])
+	{
+		if let Some(tags) = &mut self.tags
+		{
+			tags.retain(|tag| tag.name.as_ref() != name);
+
+			if tags.is_empty()
+			{
+				self.tags = None;
+			}
+		}
+	}
 }
 
 impl EncodeBgzfPayload for Field

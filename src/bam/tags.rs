@@ -181,6 +181,18 @@ impl Tag
 		unsafe { std::str::from_utf8_unchecked(&self.name[..self.name.len()]) }
 	}
 
+	/// Return the tag name as a two-byte array.
+	pub fn name(&self) -> Option<[u8; 2]>
+	{
+		self.name.as_ref().try_into().ok()
+	}
+
+	/// Check whether the tag has the specified name.
+	pub fn has_name(&self, name: &[u8; 2]) -> bool
+	{
+		self.name.as_ref() == name
+	}
+
 	pub fn first(&self) -> Option<&TagValueType>
 	{
 		self.value.first()
@@ -191,6 +203,15 @@ impl Tag
 		match self.first()?
 		{
 			TagValueType::I32(v) => Some(*v),
+			_ => None,
+		}
+	}
+
+	pub fn as_char(&self) -> Option<char>
+	{
+		match self.first()?
+		{
+			TagValueType::Char(v) => Some(*v),
 			_ => None,
 		}
 	}
@@ -232,6 +253,56 @@ impl Tag
 	{
 		self.as_str_bytes()
 			.map(|b| String::from_utf8_lossy(b).into_owned())
+	}
+
+	/// Create a string (Z) tag.
+	pub fn from_string(name: &[u8; 2], value: impl AsRef<str>) -> Self
+	{
+		Self {
+			name: name.as_ref().into(),
+			val_type: b'Z',
+			value: vec![TagValueType::String(value.as_ref().as_bytes().into())],
+		}
+	}
+
+	/// Create an integer (i) tag.
+	pub fn from_integer(name: &[u8; 2], value: i32) -> Self
+	{
+		Self {
+			name: name.as_ref().into(),
+			val_type: b'i',
+			value: vec![TagValueType::I32(value)],
+		}
+	}
+
+	/// Create a character (A) tag.
+	pub fn from_char(name: &[u8; 2], value: char) -> Self
+	{
+		Self {
+			name: name.as_ref().into(),
+			val_type: b'A',
+			value: vec![TagValueType::Char(value)],
+		}
+	}
+
+	/// Create a floating point (f) tag.
+	pub fn from_float(name: &[u8; 2], value: f32) -> Self
+	{
+		Self {
+			name: name.as_ref().into(),
+			val_type: b'f',
+			value: vec![TagValueType::F32(value)],
+		}
+	}
+
+	/// Create an integer array (B) tag.
+	pub fn from_i32_array(name: &[u8; 2], values: impl IntoIterator<Item = i32>) -> Self
+	{
+		Self {
+			name: name.as_ref().into(),
+			val_type: b'B',
+			value: values.into_iter().map(TagValueType::I32).collect(),
+		}
 	}
 }
 
@@ -631,7 +702,7 @@ where
 
 pub(crate) fn find_null_terminator_simd(bytes: &[u8], _offset: &mut usize) -> Option<usize>
 {
-	const CHUNK_SIZE: usize = 16; // SIMD width: process 16 bytes at a time
+	const CHUNK_SIZE: usize = 16; // SIMD width, process 16 bytes at a time
 
 	let mut i = 0;
 

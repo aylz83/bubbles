@@ -30,7 +30,7 @@ const DEFAULT_BLOCK_SIZE: usize = 200;
 
 use pufferfish::prelude::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum FetchRegion
 {
 	Tid(u32),
